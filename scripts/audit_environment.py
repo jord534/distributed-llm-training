@@ -96,6 +96,8 @@ def audit_torch(report_file):
         f.write(f"Is CUDA Available: {cuda_av}\n")
         if cuda_av:
             f.write(f"Torch supports bf16: {bf_support}\n")
+        else:
+            f.write("Torch supports bf16: N/A\n")
         f.write("\n")
 
 def make_audit_file():
