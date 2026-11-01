@@ -1,5 +1,6 @@
 
 import torch
+from collections import defaultdict, Counter
 
 from transformers import (
     Mistral3ForConditionalGeneration,
@@ -35,22 +36,40 @@ def load_model():
             output_loading_info=True,
         )
     )
+    print("\n\n")
 
+    name_categories = Counter()
+    for name, param in model.named_parameters():
+        name_blocks = name.split(".")[1]
+        name_categories[name_blocks] += param.numel()/1e9
+    print("Categories of weights and their respective count in billions:\n")
+    for key, val in name_categories.items():
+        print(key, val)
+    print("\n\n")
+
+    # we can check that language is 3.4B, vision is 0.4B
+
+    # let's freeze every non language weight:
+    for name, param in model.named_parameters():
+        if name.split(".")[1] != "language_model":
+            param.requires_grad_(False)
+
+    # Now let's check that any non language weight is indeed frozen:
+    stats = defaultdict(lambda: {"tensors": 0, "params": 0, "trainable": 0})
+    for name, param in model.named_parameters():
+        category = name.split(".")[1]
+        stats[category]["tensors"] += 1
+        stats[category]["params"] += param.numel()
+
+        if param.requires_grad:
+            stats[category]["trainable"] += param.numel()
+
+    print("Remaining trainable parameters by category after freezing non language weights attempt:\n")
+    for category, values in stats.items():
+        print(category, values)
+    print("\n\n")
     model = model.to(device)
 
-    def count_parameters(module):
-        # Deduplicate shared/tied parameters
-        params = {
-            id(p): p
-            for p in module.parameters()
-        }
-        return sum(p.numel() for p in params.values())
-
-
-    total = count_parameters(model)
-
-    print(f"Total parameters: {total:,}")
-    print(f"Total parameters (B): {total / 1e9:.3f} B")
     model.eval()
 
     return model, tokenizer
@@ -59,18 +78,17 @@ def load_model():
 if __name__ == "__main__":
     model, tokenizer = load_model()
 
-    inputs = tokenizer.encode(
-        "To be or not",
-        return_tensors="pt",
-    ).to(model.device)
-
     answer = input("Run model.generate? [y/N]: ").strip().lower()
 
     if answer == "y":
+        inputs = tokenizer.encode(
+                "How to play sudoku ?",
+                return_tensors="pt",
+            ).to(model.device)
         with torch.inference_mode():
             outputs = model.generate(
                 inputs,
                 max_new_tokens=30,
             )
 
-    print(tokenizer.decode(outputs[0]))
+        print(tokenizer.decode(outputs[0]))
