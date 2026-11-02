@@ -90,12 +90,11 @@ def type_check_and_freeze_check(dtype_counts, param_category, non_bf16_names):
     return None
 
 
-def load_tokenizer():
-    return MistralCommonBackend.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
+def load_tokenizer(model_id, model_revision):
+    return MistralCommonBackend.from_pretrained(model_id, revision=model_revision)
 
 
-def load_model():
-    device = get_device()
+def load_model(model_id, model_revision, device):
     print(f"Loading model on: {device}")
 
     if device.type == "cuda" and not torch.cuda.is_bf16_supported():
@@ -103,8 +102,8 @@ def load_model():
 
     model, loading_info = (
         Mistral3ForConditionalGeneration.from_pretrained(
-            MODEL_ID,
-            revision=MODEL_REVISION,
+            model_id,
+            revision=model_revision,
             dtype=torch.bfloat16,
             output_loading_info=True,
         )
@@ -120,29 +119,26 @@ def load_model():
     return model
 
 
-tokenizer = load_tokenizer() # we load the tokenizer first as it is quicker and can fail first
-model = load_model()
+# _, param_category, _ = param_type_count(model)
+# for cat, (numel, trainable) in param_category.items():
+#     print(f"{cat}: {numel / 1e9:.3f} B params, {trainable / 1e9:.3f} B trainable\n")
 
-_, param_category, _ = param_type_count(model)
-for cat, (numel, trainable) in param_category.items():
-    print(f"{cat}: {numel / 1e9:.3f} B params, {trainable / 1e9:.3f} B trainable\n")
+# answer = input("Run model.generate? [y/N]: ").strip().lower()
 
-answer = input("Run model.generate? [y/N]: ").strip().lower()
+# if answer == "y":
+#     model.eval()
+#     prompt = "How to play sudoku ?"
+#     user_prompt = input("Type in special prompt [empty for default]:").strip()
+#     if user_prompt != "":
+#         prompt = user_prompt
+#     inputs = tokenizer.encode(
+#         prompt,
+#         return_tensors="pt",
+#     ).to(model.device)
+#     with torch.inference_mode():
+#         outputs = model.generate(
+#             inputs,
+#             max_new_tokens=30,
+#         )
 
-if answer == "y":
-    model.eval()
-    prompt = "How to play sudoku ?"
-    user_prompt = input("Type in special prompt [empty for default]:").strip()
-    if user_prompt != "":
-        prompt = user_prompt
-    inputs = tokenizer.encode(
-        prompt,
-        return_tensors="pt",
-    ).to(model.device)
-    with torch.inference_mode():
-        outputs = model.generate(
-            inputs,
-            max_new_tokens=30,
-        )
-
-    print(tokenizer.decode(outputs[0]))
+#     print(tokenizer.decode(outputs[0]))

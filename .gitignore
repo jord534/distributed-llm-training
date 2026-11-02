@@ -1,2 +1,3 @@
 .venv/
 reports/audit_report_*.txt
+data/
