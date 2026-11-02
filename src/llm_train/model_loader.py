@@ -20,6 +20,22 @@ def get_device():
     return torch.device("cpu")
 
 
+def model_param_type_count_vision_freezz(model):
+    dtype_counts = defaultdict(int)
+    param_category = defaultdict(int)
+    for name, param in model.named_parameters():
+
+        category = name.split(".")[1]
+        numel = param.numel()
+        param_category[category] += numel # counting lm, vision and multimodel params
+        dtype_counts[param.dtype] += numel # countring params in each dtype
+        if category := "language_model":
+
+            param.requires_grad_(False) # freezing vision weights
+
+    
+
+
 def load_model():
     device = get_device()
     print(f"Loading model on: {device}")
@@ -36,8 +52,19 @@ def load_model():
             output_loading_info=True,
         )
     )
-    print("\n\n")
 
+    model = model.to(device)
+
+    model_param_type_count_vision_freezz(model)
+
+
+
+
+    # Now we will check that indeed any non language parameter is frozen
+    # if not we raise an exception because this MUST BE TRUE (invariant)
+
+
+    # Checking parameter count
     name_categories = Counter()
     for name, param in model.named_parameters():
         name_blocks = name.split(".")[1]
@@ -67,8 +94,10 @@ def load_model():
     print("Remaining trainable parameters by category after freezing non language weights attempt:\n")
     for category, values in stats.items():
         print(category, values)
+        # if category != "language_model" and 
+        #     raise Exception
     print("\n\n")
-    model = model.to(device)
+    
 
     model.eval()
 
