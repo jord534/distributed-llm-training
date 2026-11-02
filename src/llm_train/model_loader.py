@@ -4,6 +4,7 @@ from collections import defaultdict
 from transformers import (
     Mistral3ForConditionalGeneration,
     MistralCommonBackend,
+    AutoConfig
 )
 
 LANGUAGE_MODEL_CATEGORIES = {"language_model", "lm_head"}
@@ -90,8 +91,10 @@ def type_check_and_freeze_check(dtype_counts, param_category, non_bf16_names):
     return None
 
 
-def load_tokenizer(model_id, model_revision):
-    return MistralCommonBackend.from_pretrained(model_id, revision=model_revision)
+def load_tokenizer(model_id: str, revision: str, mode: str) -> MistralCommonBackend:
+    # mode="finetuning" for training data (conversations ending with an assistant answer),
+    # mode="test" for generation requests (ending with a user message)
+    return MistralCommonBackend.from_pretrained(model_id, revision=revision, mode=mode)
 
 
 def load_model(model_id, model_revision, device):
@@ -118,6 +121,54 @@ def load_model(model_id, model_revision, device):
 
     return model
 
+def shrink_sub_config(sub_config, dims: dict, name: str):
+    # dims maps a config field to its reduced value, e.g. {"num_hidden_layers": 2, "hidden_size": 256}
+    for field, value in dims.items():
+        # setattr on a config silently creates unknown fields: a typo would be ignored
+        if not hasattr(sub_config, field):
+            raise RuntimeError(f"Unknown field {field!r} in {name}")
+        setattr(sub_config, field, value)
+
+    # GQA: each KV head serves a group of query heads
+    kv_heads = getattr(sub_config, "num_key_value_heads", sub_config.num_attention_heads)
+    if sub_config.num_attention_heads % kv_heads != 0:
+        raise RuntimeError(
+            f"{name}: num_attention_heads {sub_config.num_attention_heads} "
+            f"not divisible by num_key_value_heads {kv_heads}"
+        )
+
+    # rotary embeddings rotate pairs of dimensions: head_dim must be even
+    head_dim = getattr(sub_config, "head_dim", None)
+    if head_dim is not None and head_dim % 2 != 0:
+        raise RuntimeError(f"{name}: head_dim {head_dim} must be even")
+    return None
+
+
+def create_dev_model(model_id, model_revision, device, text_dims: dict, vision_dims: dict):
+    # same architecture and parameter names as the real model, random weights
+    # vocab_size is left untouched: the real tokenizer and data cache stay usable
+    print(f"Creating dev model on: {device}")
+
+    if device.type == "cuda" and not torch.cuda.is_bf16_supported():
+        raise RuntimeError("BF16 unsupported on this GPU")
+
+    if "vocab_size" in text_dims:
+        raise RuntimeError("vocab_size must not be changed: the dev model shares the real tokenizer")
+
+    config = AutoConfig.from_pretrained(model_id, revision=model_revision)  # download the OG config json
+    shrink_sub_config(config.text_config, text_dims, "text_config") # shrinking to specified values in the argument
+    shrink_sub_config(config.vision_config, vision_dims, "vision_config")
+
+    model = Mistral3ForConditionalGeneration(config).to(torch.bfloat16)  # random init of weights and getting a model object analogous to the large model
+
+    # same guarantees as load_model
+    freeze_vision(model)
+    dtype_counts, param_category, non_bf16_names = param_type_count(model)
+    type_check_and_freeze_check(dtype_counts, param_category, non_bf16_names)
+
+    model = model.to(device)
+
+    return model
 
 # _, param_category, _ = param_type_count(model)
 # for cat, (numel, trainable) in param_category.items():
