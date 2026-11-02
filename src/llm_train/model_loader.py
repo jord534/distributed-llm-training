@@ -6,9 +6,6 @@ from transformers import (
     MistralCommonBackend,
 )
 
-MODEL_ID = "mistralai/Ministral-3-3B-Base-2512"
-MODEL_REVISION = "6f9c4b12a95b139af68670a6713616b757923735"
-
 LANGUAGE_MODEL_CATEGORIES = {"language_model", "lm_head"}
 
 
@@ -123,31 +120,29 @@ def load_model():
     return model
 
 
-if __name__ == "__main__":
-    model = load_model()
-    tokenizer = load_tokenizer()
+tokenizer = load_tokenizer() # we load the tokenizer first as it is quicker and can fail first
+model = load_model()
 
+_, param_category, _ = param_type_count(model)
+for cat, (numel, trainable) in param_category.items():
+    print(f"{cat}: {numel / 1e9:.3f} B params, {trainable / 1e9:.3f} B trainable\n")
 
-    _, param_category, _ = param_type_count(model)
-    for cat, (numel, trainable) in param_category.items():
-        print(f"{cat}: {numel / 1e9:.3f} B params, {trainable / 1e9:.3f} B trainable")
+answer = input("Run model.generate? [y/N]: ").strip().lower()
 
-    answer = input("Run model.generate? [y/N]: ").strip().lower()
+if answer == "y":
+    model.eval()
+    prompt = "How to play sudoku ?"
+    user_prompt = input("Type in special prompt [empty for default]:").strip()
+    if user_prompt != "":
+        prompt = user_prompt
+    inputs = tokenizer.encode(
+        prompt,
+        return_tensors="pt",
+    ).to(model.device)
+    with torch.inference_mode():
+        outputs = model.generate(
+            inputs,
+            max_new_tokens=30,
+        )
 
-    if answer == "y":
-        model.eval()
-        prompt = "How to play sudoku ?"
-        user_prompt = input("Type in special prompt [empty for default]:").strip()
-        if user_prompt != "":
-            prompt = user_prompt
-        inputs = tokenizer.encode(
-            prompt,
-            return_tensors="pt",
-        ).to(model.device)
-        with torch.inference_mode():
-            outputs = model.generate(
-                inputs,
-                max_new_tokens=30,
-            )
-
-        print(tokenizer.decode(outputs[0]))
+    print(tokenizer.decode(outputs[0]))
