@@ -7,10 +7,8 @@ from transformers import (
 )
 
 MODEL_ID = "mistralai/Ministral-3-3B-Base-2512"
-MODEL_REVISION = "main"  # TODO: pin to a commit sha from the Hub before any measured run
+MODEL_REVISION = "6f9c4b12a95b139af68670a6713616b757923735"
 
-# Top-level parameter groups that belong to the text model and must stay trainable.
-# Verify them with print(model): the LM head usually sits outside the language_model submodule.
 LANGUAGE_MODEL_CATEGORIES = {"language_model", "lm_head"}
 
 
@@ -25,9 +23,10 @@ def get_device():
 
 
 def param_category_of(name: str) -> str:
-    # "model.language_model.layers.0..."  -> "language_model"   (recent Transformers layout)
-    # "language_model.model.layers.0..."  -> "language_model"   (older layout)
-    # "lm_head.weight"                    -> "lm_head"
+    # can be "model.language_model.layers.0..." 
+    # or "language_model.model.layers.0..." 
+    # or "lm_head.weight"  
+    # we are interested in lm_head or language_model
     parts = name.split(".")
     if parts[0] == "model":
         return parts[1]
@@ -37,11 +36,11 @@ def param_category_of(name: str) -> str:
 def freeze_vision(model: Mistral3ForConditionalGeneration):
     for name, param in model.named_parameters():
         if param_category_of(name) not in LANGUAGE_MODEL_CATEGORIES:
-            param.requires_grad_(False)  # freezing vision tower and multimodal projector
+            param.requires_grad_(False)  # freezing vision and multimodal weights
 
 
 def param_type_count(model: Mistral3ForConditionalGeneration):
-    # Separate pass: reads the state left by freeze_vision, so the checks below can actually fail.
+    # Separate pass: reads the state left by freeze_vision
     dtype_counts = defaultdict(int)
     param_category = defaultdict(lambda: [0, 0])  # category -> [numel, trainable numel]
     non_bf16_names = []
@@ -127,6 +126,7 @@ def load_model():
 if __name__ == "__main__":
     model = load_model()
     tokenizer = load_tokenizer()
+
 
     _, param_category, _ = param_type_count(model)
     for cat, (numel, trainable) in param_category.items():
