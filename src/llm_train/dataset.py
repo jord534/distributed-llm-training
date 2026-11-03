@@ -1,5 +1,5 @@
 from datasets import load_dataset
-
+from .serialization import get_tokens_from_convo
 
 def get_dataset(set_name: str, revision: str, split: str,
                 sample_size: int, seed: int, val_frac: float, cache_dir : str):
@@ -10,9 +10,7 @@ def get_dataset(set_name: str, revision: str, split: str,
         split=split,
         cache_dir=cache_dir,
     )
-
-    # now let's get a seed based shuffle, the amount of samples we need and the val samples split
-
+    
     # shuffle
     dataset = dataset.shuffle(seed)
     # sample size
@@ -26,3 +24,12 @@ def get_dataset(set_name: str, revision: str, split: str,
     train = list(zip(splits["train"]["prompt_id"], splits["train"]["messages"]))
     val = list(zip(splits["test"]["prompt_id"], splits["test"]["messages"]))
     return train, val
+
+
+def get_truncated_convo(prompt_id, convo, max_len, tokenizer):
+    token_list = get_tokens_from_convo(convo, tokenizer)
+    return {
+        "prompt_id": prompt_id,
+        "input_ids": token_list[:max_len],
+        "truncated": max_len < len(token_list)
+    }
