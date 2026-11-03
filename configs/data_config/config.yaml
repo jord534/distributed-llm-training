@@ -20,5 +20,6 @@ processing:
   invalid_conversations: skip     # skip and record the reason in the manifest, instead of crashing
 
 cache:
-  root: artifacts/data            # ignored by Git
-  overwrite: false                # refuse to replace an existing cache
+  root: artifacts/data            # the tokenized cache (step 2.4)
+  hf_cache: artifacts/hf_cache    # raw downloads from Hugging Face
+  overwrite: false
