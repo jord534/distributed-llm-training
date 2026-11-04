@@ -5,7 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 import numpy as np
-from datasets import Dataset, Features, Sequence, Value, load_dataset
+from datasets import Dataset, Features, Sequence, Value, load_dataset, load_from_disk
 from .serialization import get_tokens_from_convo
 
 FEATURES = Features({
@@ -97,5 +97,18 @@ def compute_fingerprint(examples):
     return "sha256:" + h.hexdigest()
 
 
-def read_cached_dataset(cached_dataset_path: str):
-    # this provides exmamples to the python kernel after reading them off the cache
+def read_cached_data(cache_path: str):
+    # this reads what was previously saved
+    ds_path = Path(cache_path)
+    train_path = ds_path / "train"
+    val_path = ds_path / "val"
+    if not train_path.exists():
+        raise FileNotFoundError("Train path was not found.")
+    if not val_path.exists():
+        raise FileNotFoundError("Val path was not found.")
+    manifest_path = ds_path / "manifest.json"
+    train_set = load_from_disk(train_path)
+    val_set = load_from_disk(val_path)
+    with open(manifest_path, "r") as file:
+        manifest = json.load(file)
+    return train_set, val_set, manifest
