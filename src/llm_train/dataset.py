@@ -41,7 +41,7 @@ def get_dataset(set_name: str, revision: str, split: str,
 
 
 def get_truncated_convo(prompt_id, convo, max_len, tokenizer):
-    token_list = get_tokens_from_convo(convo, tokenizer)
+    token_list = get_tokens_from_convo(convo, tokenizer) # TOKENIZING STEP
     return {
         "prompt_id": prompt_id,
         "input_ids": token_list[:max_len],
@@ -95,3 +95,7 @@ def compute_fingerprint(examples):
         h.update(len(example["input_ids"]).to_bytes(4, "little"))
         h.update(np.asarray(example["input_ids"], dtype="<i4").tobytes())
     return "sha256:" + h.hexdigest()
+
+
+def read_cached_dataset(cached_dataset_path: str):
+    # this provides exmamples to the python kernel after reading them off the cache
