@@ -78,4 +78,16 @@ def get_loss(logits, labels, n_learned):
     return loss
 
 
+def get_optimizer_and_lr_scheduler(params, lr, weight_decay, warmup_step, total_steps):
+    active_parms = [p for p in params if p.requires_grad_]
+    optimizer =  torch.optim.AdamW(
+        params=active_parms,
+        lr = lr,
+        weight_decay=weight_decay,
+    )
+    warmup_lambda = lambda epoch : epoch // warmup_step
+    decay_lambda = lambda epoch : 
+    lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, 
+
+
 
