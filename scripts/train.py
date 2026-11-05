@@ -3,6 +3,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
+from transformers import Mistral3ForConditionalGeneration
+import time
+import math
 
 def set_seed(seed: int):
     # every source of randomness depends on the seed: model init, data order, dropout
@@ -91,7 +94,66 @@ def get_optimizer_and_lr_scheduler(params, lr, weight_decay, warmup_step, total_
     return optimizer, lr_scheduler
 
 
-def training_step(model, batch, optimizer, scheduler, clip_grad, autocast: bool = False):
-    for b in batch:
-        model.forward(b)
+def training_step(
+        model: Mistral3ForConditionalGeneration,
+        mini_batches: list, 
+        optimizer: torch.optim.AdamW, 
+        scheduler: torch.optim.lr_scheduler.LambdaLR, 
+        max_grad_norm: float, 
+        use_autocast: bool, # to enable mixed precision for a quick forward pass and accurate loss and grad
+    ):
+    
+    model.train()
+
+    if model.device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(model.device) 
+
+    if model.device.type == "cuda":
+        torch.cuda.synchronize()          # wait for previous GPU work to finish
+    start = time.perf_counter()
+
+    optimizer.zero_grad()
+
+    learned_tokens = sum([batch["n_learned"] for batch in mini_batches])
+    total_tokens = sum([batch["n_tokens"] for batch in mini_batches])
+    total_loss = 0
+    for batch in mini_batches:
+        labels = batch["labels"].to(model.device)
+        input_ids = batch["input_ids"].to(model.device)
+        attn_mask = batch["attention_mask"].to(model.device)
+        with torch.autocast(device_type=model.device.type, dtype=torch.bfloat16, enabled = use_autocast): # mixed precision
+            model_output = model(input_ids=input_ids, attention_mask = attn_mask) # forward pass
+        logits = model_output.logits
+        loss = get_loss(logits, labels, learned_tokens)
+        total_loss += loss.item()
+        loss.backward()
         
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+    # checking the grad and the loss are < inf:
+    if not torch.isfinite(grad_norm) :
+        raise ValueError(f"The gradient exploded: {grad_norm.item()}.")
+    if not math.isfinite(total_loss):
+        raise ValueError(f"The loss has exploded: {total_loss}.")
+
+    lr = optimizer.param_groups[0]["lr"]
+
+    optimizer.step()
+    scheduler.step()
+    step = scheduler.last_epoch
+    if model.device.type == "cuda":
+        torch.cuda.synchronize()
+    step_time = time.perf_counter() - start
+
+    peak_mem = torch.cuda.max_memory_allocated(model.device) / 1e9 if model.device.type == "cuda" else None
+
+    return {
+        "step": step,
+        "loss": total_loss,
+        "grad_norm": grad_norm.item(),
+        "lr": lr,
+        "tokens": total_tokens,
+        "learned_tokens": learned_tokens,
+        "step_time_s": step_time, # diagnostics
+        "peak_memory_gb": peak_mem, # diagnostics
+    }
+
