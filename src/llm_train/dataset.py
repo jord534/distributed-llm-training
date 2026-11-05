@@ -97,7 +97,7 @@ def compute_fingerprint(examples):
     return "sha256:" + h.hexdigest()
 
 
-def read_cached_data(cache_path: str):
+def read_cached_data(cache_path: str) -> tuple[Dataset, Dataset, Any]:
     # this reads what was previously saved
     ds_path = Path(cache_path)
     train_path = ds_path / "train"

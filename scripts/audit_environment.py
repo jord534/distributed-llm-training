@@ -100,15 +100,29 @@ def audit_torch(report_file):
             f.write("Torch supports bf16: N/A\n")
         f.write("\n")
 
-def make_audit_file():
+def make_audit_file(hash: None):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     import os
     os.makedirs("../reports", exist_ok=True)
-    report_filename = f"reports/audit_report_{timestamp}.txt"
+    if hash is None:
+        report_filename = f"reports/audit_report_{timestamp}.txt"
+    else :
+        report_filename = f"reports/audit_report_{hash}.txt"
     with open(report_filename, "w", encoding="utf-8") as f:
         f.write("=== Python Environment Audit Report ===\n")
         f.write(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     return report_filename
+
+def get_audit(hash):
+    report_file = make_audit_file(hash)
+    audit_os(report_file)
+    audit_python(report_file)  # Now integrated into the run
+    
+    has_torch = audit_environment(report_file)
+    if has_torch:
+        audit_torch(report_file)
+    return report_file
+
 
 if __name__ == "__main__":
     print("Starting audit...")

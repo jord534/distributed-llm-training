@@ -157,3 +157,22 @@ def training_step(
         "peak_memory_gb": peak_mem, # diagnostics
     }
 
+def val_step(
+        model: Mistral3ForConditionalGeneration,
+        mini_batches: list, 
+        use_autocast: bool, # to enable mixed precision for a quick forward pass and accurate loss and grad
+    ):
+    model.eval() # this disables dropouts and prompts batchnorm to use internal statistics
+    learned_tokens = sum([batch["n_learned"] for batch in mini_batches])
+    loss_sum = 0
+    with torch.no_grad():
+        for batch in mini_batches:
+            labels = batch["labels"].to(model.device)
+            input_ids = batch["input_ids"].to(model.device)
+            attn_mask = batch["attention_mask"].to(model.device)
+            with torch.autocast(device_type=model.device.type, dtype=torch.bfloat16, enabled = use_autocast): # mixed precision
+                model_output = model(input_ids=input_ids, attention_mask = attn_mask) # forward pass
+            logits = model_output.logits
+            loss_sum += get_loss(logits, labels, 1).item()
+
+    return loss_sum / learned_tokens
