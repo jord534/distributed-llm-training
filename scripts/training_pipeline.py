@@ -1,12 +1,12 @@
 from pathlib import Path
 import yaml
 import os
-import hashlib
 from audit_environment import get_audit
 import shutil
 from transformers import Mistral3ForConditionalGeneration
 from datasets import Dataset
 import json
+import torch
 
 from llm_train.train import (
     set_seed,
@@ -28,30 +28,27 @@ from llm_train.dataset import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def copy_audit_and_config(train_cfg, this_run_dir, config):
-    # copy the config file there
-    shutil.copyfile(train_cfg, this_run_dir)
+    
     # make a run directorys pecific to this run
     try:
         os.makedirs(this_run_dir, exist_ok=False)
     except OSError as e:
         print("The run name in the run config already has a directory. If your run is not a repeat, please provide a new name.")
         raise e
-    
+    # copy the config file there
+    with open(this_run_dir / "config.yaml", "w") as file:
+        json.dump(train_cfg)
 
     # run the environment audit
-    # generate audit hash:
-    m = hashlib.sha256()
-    m.update(config)
-    hash = m.hexdigest()
-    audit_file = get_audit(hash)
+    audit_file = get_audit()
 
     # move it into this_run_dir
-    shutil.copyfile(audit_file, this_run_dir)
+    shutil.copyfile(audit_file, this_run_dir /  "environment.json")
     return None
 
 def instantiate_model(config) -> Mistral3ForConditionalGeneration:
     # instantiate model
-    device = config["device"]
+    device = torch.device(config["device"])
     model_cfg = config["model"]
 
     model_id = model_cfg["model_id"]
@@ -73,12 +70,12 @@ def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
     total_steps = train["total_steps"]
     weight_decay = train["weight_decay"]
 
-    optimizer, scheduler = get_optimizer_and_lr_scheduler(model.parameters, lr, weight_decay, warmup_steps, total_steps)
+    optimizer, scheduler = get_optimizer_and_lr_scheduler(model.parameters(), lr, weight_decay, warmup_steps, total_steps)
     return optimizer, scheduler, total_steps
 
 
 def training_launcher(train_config: str):
-    run_dir = REPO_ROOT / "artifacts" / "runs "
+    run_dir = REPO_ROOT / "artifacts" / "runs"
     # check artifacts/run exists, else create it
     os.makedirs(run_dir, exist_ok=True)
 
@@ -118,14 +115,12 @@ def training_launcher(train_config: str):
 
     log_path = this_run_dir / "log.jsonl"
 
-    train_set.batch
-
     i = 0
     for step in range(total_steps):
         # prepare the mini batch:
         mini_batches = [] 
         for _ in range(accumulation_step):
-            examples = train_set[i:i + micro_batch_size]
+            examples = [train_set[j] for j in range(i, i+ micro_batch_size)]
             batch = get_batch_from_examples(examples)
             mini_batches.append(batch)
             i += micro_batch_size
@@ -140,11 +135,20 @@ def training_launcher(train_config: str):
         )
         # save log line
         with open(log_path, "a") as file:
-            json.dump(log, file)
+            file.write(json.dumps(log) + "\n")
 
-        if (step + 1) % eval_every == 0 == 0:
-            val_batches = []
-            loss = val_step(model, val_batches)
+        if (step + 1) % eval_every == 0:
+            val_mini_batches = []
+            for k in range(0, len(val_set), micro_batch_size):
+                val_examples = [val_set[j] for j in range(k, k+ micro_batch_size)]
+                val_batch = get_batch_from_examples(val_examples)
+                val_mini_batches.append(val_batch)
+
+            val_loss = val_step(model, val_mini_batches, autocast)
+            val_log = {"step": step +1, "val_loss": val_loss}
+            with open(log_path, "a") as file:
+                file.write(json.dumps(val_log) + "\n")
+
     
 
 
