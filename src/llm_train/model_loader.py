@@ -37,11 +37,11 @@ def freeze_vision(model: Mistral3ForConditionalGeneration):
             param.requires_grad_(False)  # freezing vision and multimodal weights
 
 
-def param_type_count(model: Mistral3ForConditionalGeneration):
+def param_type_count(model: Mistral3ForConditionalGeneration, dtype: torch.dtype):
     # Separate pass: reads the state left by freeze_vision
     dtype_counts = defaultdict(int)
     param_category = defaultdict(lambda: [0, 0])  # category -> [numel, trainable numel]
-    non_bf16_names = []
+    wrong_dtype_names = []
     for name, param in model.named_parameters():
         category = param_category_of(name)
         numel = param.numel()
@@ -49,10 +49,10 @@ def param_type_count(model: Mistral3ForConditionalGeneration):
         dtype_counts[param.dtype] += numel  # counting params in each dtype
         if param.requires_grad:
             param_category[category][1] += numel
-        if param.dtype != torch.bfloat16:
-            non_bf16_names.append(name)
+        if param.dtype != dtype:
+            wrong_dtype_names.append(name)
 
-    return dtype_counts, param_category, non_bf16_names
+    return dtype_counts, param_category, wrong_dtype_names
 
 
 def check_for_missing_or_unexpected_param(loading_info):
@@ -67,13 +67,13 @@ def check_for_missing_or_unexpected_param(loading_info):
     return None
 
 
-def type_check_and_freeze_check(dtype_counts, param_category, non_bf16_names):
-    non_bf16 = sum(count for dtype, count in dtype_counts.items() if dtype != torch.bfloat16)
+def type_check_and_freeze_check(dtype_counts, param_category, wrong_dtype_names, dtype:torch.dtype):
+    wrong_dtypes = sum(count for dt, count in dtype_counts.items() if dt != dtype)
 
-    if non_bf16 > 0:
+    if wrong_dtypes > 0:
         raise RuntimeError(
-            f"Found {non_bf16} non-BF16 parameters ({dict(dtype_counts)}), "
-            f"e.g. {non_bf16_names[:5]}"
+            f"Found {wrong_dtypes} wrong dtype parameters ({dict(dtype_counts)}), "
+            f"e.g. {wrong_dtype_names[:5]}"
         )
 
     # Catches both a naming surprise (no language-model group found) and over-freezing.
@@ -97,7 +97,7 @@ def load_tokenizer(model_id: str, revision: str, mode: str) -> MistralCommonBack
     return MistralCommonBackend.from_pretrained(model_id, revision=revision, mode=mode)
 
 
-def load_model(model_id, model_revision, device):
+def load_model(model_id, model_revision, device, dtype: torch.dtype):
     print(f"Loading model on: {device}")
 
     if device.type == "cuda" and not torch.cuda.is_bf16_supported():
@@ -107,15 +107,15 @@ def load_model(model_id, model_revision, device):
         Mistral3ForConditionalGeneration.from_pretrained(
             model_id,
             revision=model_revision,
-            dtype=torch.bfloat16,
+            dtype=dtype,
             output_loading_info=True,
         )
     )
 
     check_for_missing_or_unexpected_param(loading_info)
     freeze_vision(model)
-    dtype_counts, param_category, non_bf16_names = param_type_count(model)
-    type_check_and_freeze_check(dtype_counts, param_category, non_bf16_names)
+    dtype_counts, param_category, wrong_dtype_names = param_type_count(model, dtype)
+    type_check_and_freeze_check(dtype_counts, param_category, wrong_dtype_names, dtype)
 
     model = model.to(device)
 
@@ -144,7 +144,7 @@ def shrink_sub_config(sub_config, dims: dict, name: str):
     return None
 
 
-def create_dev_model(model_id, model_revision, device, text_dims: dict, vision_dims: dict):
+def create_dev_model(model_id, model_revision, device, text_dims: dict, vision_dims: dict, dtype: torch.dtype):
     # same architecture and parameter names as the real model, random weights
     # vocab_size is left untouched: the real tokenizer and data cache stay usable
     print(f"Creating dev model on: {device}")
@@ -159,37 +159,13 @@ def create_dev_model(model_id, model_revision, device, text_dims: dict, vision_d
     shrink_sub_config(config.text_config, text_dims, "text_config") # shrinking to specified values in the argument
     shrink_sub_config(config.vision_config, vision_dims, "vision_config")
 
-    model = Mistral3ForConditionalGeneration(config).to(torch.bfloat16)  # random init of weights and getting a model object analogous to the large model
+    model = Mistral3ForConditionalGeneration(config).to(dtype)  # random init of weights and getting a model object analogous to the large model
 
     # same guarantees as load_model
     freeze_vision(model)
-    dtype_counts, param_category, non_bf16_names = param_type_count(model)
-    type_check_and_freeze_check(dtype_counts, param_category, non_bf16_names)
+    dtype_counts, param_category, wrong_dtype_names = param_type_count(model, dtype)
+    type_check_and_freeze_check(dtype_counts, param_category, wrong_dtype_names, dtype)
 
     model = model.to(device)
 
     return model
-
-# _, param_category, _ = param_type_count(model)
-# for cat, (numel, trainable) in param_category.items():
-#     print(f"{cat}: {numel / 1e9:.3f} B params, {trainable / 1e9:.3f} B trainable\n")
-
-# answer = input("Run model.generate? [y/N]: ").strip().lower()
-
-# if answer == "y":
-#     model.eval()
-#     prompt = "How to play sudoku ?"
-#     user_prompt = input("Type in special prompt [empty for default]:").strip()
-#     if user_prompt != "":
-#         prompt = user_prompt
-#     inputs = tokenizer.encode(
-#         prompt,
-#         return_tensors="pt",
-#     ).to(model.device)
-#     with torch.inference_mode():
-#         outputs = model.generate(
-#             inputs,
-#             max_new_tokens=30,
-#         )
-
-#     print(tokenizer.decode(outputs[0]))
