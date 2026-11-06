@@ -34,6 +34,11 @@ from llm_train.dataset import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+TORCH_DTYPES = {
+    "float32": torch.float32,
+    "bfloat16": torch.bfloat16,
+}
+
 def copy_audit_and_config(this_run_dir, train_cfg):
     
     # make a run directorys pecific to this run
@@ -64,13 +69,18 @@ def instantiate_model(config) -> Mistral3ForConditionalGeneration:
 
     model_id = model_cfg["model_id"]
     revision = model_cfg["revision"]
+    dtype = model_cfg["dtype"]
+    try:
+        dtype = TORCH_DTYPES[dtype]
+    except KeyError as e:
+        raise e(f"model.dtype must be one of {list(TORCH_DTYPES)}, got {dtype!r}")
 
     if model_cfg["kind"] == "dev":
         text_dims = config["dev_dims"]["text_dims"]
         vision_dims = config["dev_dims"]["vision_dims"]
-        model = create_dev_model(model_id, revision, device, text_dims, vision_dims)
+        model = create_dev_model(model_id, revision, device, text_dims, vision_dims, dtype)
     else:
-        model = load_model(model_id, revision, device)
+        model = load_model(model_id, revision, device, dtype)
 
     return model
 

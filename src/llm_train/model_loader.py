@@ -101,7 +101,7 @@ def load_model(model_id, model_revision, device, dtype: torch.dtype):
     print(f"Loading model on: {device}")
 
     if device.type == "cuda" and not torch.cuda.is_bf16_supported():
-        raise RuntimeError("BF16 unsupported on this GPU")
+        raise RuntimeError("BF16 unsupported on this GPU") # BF16 is import for mixed precision and therefore speed
 
     model, loading_info = (
         Mistral3ForConditionalGeneration.from_pretrained(
