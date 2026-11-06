@@ -96,7 +96,7 @@ def get_optimizer_and_lr_scheduler(params, lr, weight_decay, warmup_step, total_
 
 def training_step(
         model: Mistral3ForConditionalGeneration,
-        mini_batches: list, 
+        micro_batches: list, 
         optimizer: torch.optim.AdamW, 
         scheduler: torch.optim.lr_scheduler.LambdaLR, 
         max_grad_norm: float, 
@@ -114,10 +114,10 @@ def training_step(
 
     optimizer.zero_grad()
 
-    learned_tokens = sum([batch["n_learned"] for batch in mini_batches])
-    total_tokens = sum([batch["n_tokens"] for batch in mini_batches])
+    learned_tokens = sum([batch["n_learned"] for batch in micro_batches])
+    total_tokens = sum([batch["n_tokens"] for batch in micro_batches])
     total_loss = 0
-    for batch in mini_batches:
+    for batch in micro_batches:
         labels = batch["labels"].to(model.device)
         input_ids = batch["input_ids"].to(model.device)
         attn_mask = batch["attention_mask"].to(model.device)
@@ -159,14 +159,14 @@ def training_step(
 
 def val_step(
         model: Mistral3ForConditionalGeneration,
-        mini_batches: list, 
+        micro_batches: list, 
         use_autocast: bool, # to enable mixed precision for a quick forward pass and accurate loss and grad
     ):
     model.eval() # this disables dropouts and prompts batchnorm to use internal statistics
-    learned_tokens = sum([batch["n_learned"] for batch in mini_batches])
+    learned_tokens = sum([batch["n_learned"] for batch in micro_batches])
     loss_sum = 0
     with torch.no_grad():
-        for batch in mini_batches:
+        for batch in micro_batches:
             labels = batch["labels"].to(model.device)
             input_ids = batch["input_ids"].to(model.device)
             attn_mask = batch["attention_mask"].to(model.device)

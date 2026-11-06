@@ -12,6 +12,8 @@ import hashlib
 import time
 import struct
 import tempfile
+import itertools
+from torch.utils.data import DataLoader, DistributedSampler
 
 from llm_train.train import (
     set_seed,
@@ -137,41 +139,46 @@ def training_launcher(train_config: str):
 
     log_path = perm_run_dir / "log.jsonl"
 
-    i = 0
+    train_sampler, train_loader = get_sampler_loader(train_set, seed, micro_batch_size, get_batch_from_examples)
+    train_batches = batches_on_tap(train_loader, train_sampler)
+
     for step in range(total_steps):
-        # prepare the mini batch:
-        mini_batches = [] 
-        for _ in range(accumulation_steps):
-            examples = [train_set[j % len(train_set)] for j in range(i, i + micro_batch_size)]
-            i += micro_batch_size
-            batch = get_batch_from_examples(examples)
-            mini_batches.append(batch)
+
+        # prepare the micro_batches
+        micro_batches = [next(train_batches) for _ in range(accumulation_steps)] 
 
         log = training_step(
             model,
-            mini_batches,
+            micro_batches,
             optimizer,
             scheduler,
             max_grad_norm,
             autocast
         )
+
         # save log line
         with open(log_path, "a") as file:
             file.write(json.dumps(log) + "\n")
 
         if (step + 1) % eval_every == 0:
-            val_mini_batches = []
-            for k in range(0, len(val_set), micro_batch_size):
-                end_idx = min(k + micro_batch_size, len(val_set))
-                val_examples = [val_set[j] for j in range(k, end_idx)]
-                val_batch = get_batch_from_examples(val_examples)
-                val_mini_batches.append(val_batch)
-
-            val_loss = val_step(model, val_mini_batches, autocast)
+            val_loss = val_step(model, val_set, autocast)
             val_log = {"step": step +1, "val_loss": val_loss}
             with open(log_path, "a") as file:
                 file.write(json.dumps(val_log) + "\n")
 
+
+def batches_on_tap(loader: DataLoader, sampler: DistributedSampler):
+    # loops over the data again and again, with a new shuffle each epoch
+    for epoch in itertools.count():
+        sampler.set_epoch(epoch)   # each time the yield returns the end, we iterate over this loop and start a new epoch.
+        yield from loader # loader gives batches of size micro_batch_size and collates them using our specified function
+
+def get_sampler_loader(dataset, seed, micro_batch_size, fn):
+    sampler = DistributedSampler(dataset, num_replicas=1, rank=0,
+                                 shuffle=True, seed=seed, drop_last=True)
+    loader = DataLoader(dataset, batch_size=micro_batch_size, sampler=sampler,
+                        collate_fn=fn, drop_last=True)
+    return sampler, loader
 
 if __name__ == "__main__":
     
