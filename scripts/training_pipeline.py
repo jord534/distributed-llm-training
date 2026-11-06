@@ -34,7 +34,7 @@ from llm_train.dataset import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-def copy_audit_and_config(this_run_dir, config):
+def copy_audit_and_config(this_run_dir, train_cfg):
     
     # make a run directorys pecific to this run
     try:
@@ -43,8 +43,7 @@ def copy_audit_and_config(this_run_dir, config):
         print("The run name in the run config already has a directory. If your run is not a repeat, please provide a new name.")
         raise e
     # copy the config file there
-    with open(this_run_dir / "config.yaml", "w") as file:
-        yaml.dump(config, file)
+    shutil.copyfile(train_cfg, this_run_dir / "config.yaml")
 
     # run the environment audit
     m = hashlib.sha256()
@@ -110,7 +109,7 @@ def training_launcher(train_config: str):
 
         this_run_dir = tmp_dir / run_name
         
-        copy_audit_and_config(this_run_dir, config)
+        copy_audit_and_config(this_run_dir, train_cfg)
 
         # set seed
         seed = config["seed"]
@@ -121,7 +120,12 @@ def training_launcher(train_config: str):
 
         # read cached data
         cache_dir = Path(config["data"]["cache"])
+        max_training_examples = config["data"]["max_train_examples"]
         train_set, val_set, manifest = read_cached_data(REPO_ROOT / cache_dir)
+        if max_training_examples is not None:
+            if max_training_examples > len(train_set):
+                raise ValueError("Requested number of training examples exceeds available examples")
+            train_set = train_set.select(range(max_training_examples)) # allow for smaller examples to be used for testing purposes
 
         # create optimizer
         optimizer, scheduler, total_steps = fetch_optimizer_scheduler(config, model)
@@ -134,6 +138,9 @@ def training_launcher(train_config: str):
         eval_every = train["eval_every"]
         micro_batch_size = train["micro_batch_size"]
         accumulation_steps = train["accumulation_steps"]
+
+        if activation_checkpointing:
+            model.gradient_checkpointing_enable()
 
 
         # copy all from temp dir to actual dir
