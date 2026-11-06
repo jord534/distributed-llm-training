@@ -7,6 +7,11 @@ from transformers import Mistral3ForConditionalGeneration
 from datasets import Dataset
 import json
 import torch
+import sys
+import hashlib
+import time
+import struct
+import tempfile
 
 from llm_train.train import (
     set_seed,
@@ -27,7 +32,7 @@ from llm_train.dataset import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-def copy_audit_and_config(train_cfg, this_run_dir, config):
+def copy_audit_and_config(this_run_dir, config):
     
     # make a run directorys pecific to this run
     try:
@@ -40,10 +45,15 @@ def copy_audit_and_config(train_cfg, this_run_dir, config):
         yaml.dump(config, file)
 
     # run the environment audit
-    audit_file = get_audit()
+    m = hashlib.sha256()
+    t = time.time()
+    b = struct.pack("f", t)
+    m.update(b)
+    hash = m.hexdigest()
+    audit_file = get_audit(hash)
 
     # move it into this_run_dir
-    shutil.copyfile(audit_file, this_run_dir /  "environment.json")
+    shutil.copyfile(audit_file, this_run_dir /  "environment.txt")
     return None
 
 def instantiate_model(config) -> Mistral3ForConditionalGeneration:
@@ -55,8 +65,8 @@ def instantiate_model(config) -> Mistral3ForConditionalGeneration:
     revision = model_cfg["revision"]
 
     if model_cfg["kind"] == "dev":
-        text_dims = model_cfg["dev_dims"]["text_dims"]
-        vision_dims = model_cfg["dev_dims"]["vision_dims"]
+        text_dims = config["dev_dims"]["text_dims"]
+        vision_dims = config["dev_dims"]["vision_dims"]
         model = create_dev_model(model_id, revision, device, text_dims, vision_dims)
     else:
         model = load_model(model_id, revision, device)
@@ -75,45 +85,57 @@ def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
 
 
 def training_launcher(train_config: str):
-    run_dir = REPO_ROOT / "artifacts" / "runs"
-    # check artifacts/run exists, else create it
-    os.makedirs(run_dir, exist_ok=True)
-
     train_cfg = Path(train_config)
     if not train_cfg.exists():
         raise FileNotFoundError(f"The following config file was not found: {train_cfg}")
     
+    run_dir = REPO_ROOT / "artifacts" / "runs"
     with open(train_cfg, "r") as file:
         config = yaml.safe_load(file)
-
+    # check artifacts/run exists, if not create a temp dir and copy all in the actual dir at the end (to catch exceptions)
     run_name = config["run_name"]
-    this_run_dir = run_dir / run_name
-    copy_audit_and_config(train_cfg, this_run_dir, config)
+    perm_run_dir = run_dir / run_name
 
-    # set seed
-    seed = config["seed"]
-    set_seed(seed)
+    if perm_run_dir.exists():
+        raise FileExistsError(f"Run already exists: {perm_run_dir}")
 
-    # instantiate model
-    model = instantiate_model(config)
+    
+    with tempfile.TemporaryDirectory() as tmp_dir :
+        tmp_dir = Path(tmp_dir)
 
-    # read cached data
-    cache_dir = Path(config["data"]["cache"])
-    train_set, val_set, manifest = read_cached_data(REPO_ROOT / cache_dir)
+        this_run_dir = tmp_dir / run_name
+        
+        copy_audit_and_config(train_cfg, this_run_dir, config)
 
-    # create optimizer
-    optimizer, scheduler, total_steps = fetch_optimizer_scheduler(config, model)
+        # set seed
+        seed = config["seed"]
+        set_seed(seed)
 
-    # loop over training steps
-    train = config["train"]
-    max_grad_norm = train["max_grad_norm"]
-    autocast = train["autocast"]
-    activate_checkpointing = train["activate_checkpointing"]
-    eval_every = train["eval_every"]
-    micro_batch_size = train["micro_batch_size"]
-    accumulation_steps = train["accumulation_steps"]
+        # instantiate model
+        model = instantiate_model(config)
 
-    log_path = this_run_dir / "log.jsonl"
+        # read cached data
+        cache_dir = Path(config["data"]["cache"])
+        train_set, val_set, manifest = read_cached_data(REPO_ROOT / cache_dir)
+
+        # create optimizer
+        optimizer, scheduler, total_steps = fetch_optimizer_scheduler(config, model)
+
+        # loop over training steps
+        train = config["train"]
+        max_grad_norm = train["max_grad_norm"]
+        autocast = train["autocast"]
+        activation_checkpointing = train["activation_checkpointing"]
+        eval_every = train["eval_every"]
+        micro_batch_size = train["micro_batch_size"]
+        accumulation_steps = train["accumulation_steps"]
+
+
+        # copy all from temp dir to actual dir
+        perm_run_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(this_run_dir), str(perm_run_dir))
+
+    log_path = perm_run_dir / "log.jsonl"
 
     i = 0
     for step in range(total_steps):
@@ -150,16 +172,10 @@ def training_launcher(train_config: str):
             with open(log_path, "a") as file:
                 file.write(json.dumps(val_log) + "\n")
 
+
+if __name__ == "__main__":
     
-
-
-
-
-
-
-
-    
-
-    
-
-    
+    if len(sys.argv) != 2:
+            raise SystemExit("Usage: uv run python scripts/training_pipeline.py <trianing config path>")
+    train_config = sys.argv[1]
+    training_launcher(train_config)
