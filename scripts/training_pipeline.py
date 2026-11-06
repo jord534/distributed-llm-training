@@ -72,8 +72,8 @@ def instantiate_model(config) -> Mistral3ForConditionalGeneration:
     dtype = model_cfg["dtype"]
     try:
         dtype = TORCH_DTYPES[dtype]
-    except KeyError as e:
-        raise e(f"model.dtype must be one of {list(TORCH_DTYPES)}, got {dtype!r}")
+    except KeyError:
+        raise ValueError(f"model.dtype must be one of {list(TORCH_DTYPES)}, got {dtype!r}") from None
 
     if model_cfg["kind"] == "dev":
         text_dims = config["dev_dims"]["text_dims"]
