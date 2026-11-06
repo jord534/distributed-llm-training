@@ -122,13 +122,16 @@ def training_launcher(train_config: str):
         copy_audit_and_config(this_run_dir, train_cfg)
 
         # set seed
+        print("Setting seed...\n")
         seed = config["seed"]
         set_seed(seed)
 
         # instantiate model
+        print("Instantiate model... \n")
         model = instantiate_model(config)
 
         # read cached data
+        print("Reading cached data for training...\n")
         cache_dir = Path(config["data"]["cache"])
         max_training_examples = config["data"]["max_train_examples"]
         train_set, val_set, manifest = read_cached_data(REPO_ROOT / cache_dir)
@@ -138,6 +141,7 @@ def training_launcher(train_config: str):
             train_set = train_set.select(range(max_training_examples)) # allow for smaller examples to be used for testing purposes
 
         # create optimizer
+        print("Fetching optimizer and scheduler... \n")
         optimizer, scheduler, total_steps = fetch_optimizer_scheduler(config, model)
 
         # loop over training steps
@@ -158,12 +162,17 @@ def training_launcher(train_config: str):
 
     log_path = perm_run_dir / "log.jsonl"
 
+    print("GEtting sampler and loader ready to serve batches... \n")
     train_sampler, train_loader = get_sampler_loader(train_set, seed, micro_batch_size, get_batch_from_examples)
     train_batches = batches_on_tap(train_loader, train_sampler)
 
     val_loader = DataLoader(val_set, batch_size=micro_batch_size, shuffle=False, collate_fn=get_batch_from_examples, drop_last=False)
     # val only needs a loader as we are going through all val exmaples each time we run val_step
 
+    print("="*40)
+    print("STARTING TRAINING LOOP\n\n")
+    eta = None
+    steptimes = []
     for step in range(total_steps):
 
         # prepare the micro_batches
@@ -177,16 +186,27 @@ def training_launcher(train_config: str):
             max_grad_norm,
             autocast
         )
-
+        steptimes.append(log["step_time_s"])
+        if len(steptimes)<20:
+            eta = sum(steptimes)/len(steptimes)
+        else:
+            eta = sum(steptimes[-20:])/20
+        
+        print(f"Step [{step}/{total_steps}] (ETA: {eta/60}min): {log}\n")
         # save log line
         with open(log_path, "a") as file:
             file.write(json.dumps(log) + "\n")
 
+
         if (step + 1) % eval_every == 0:
             val_loss = val_step(model, val_loader, autocast)
             val_log = {"step": step +1, "val_loss": val_loss}
+            print(f"[VALIDATION AT STEP {step +1}]: {val_loss}\n")
             with open(log_path, "a") as file:
                 file.write(json.dumps(val_log) + "\n")
+
+    print("Training concluded.")
+    print("="*40)
 
 
 def batches_on_tap(loader: DataLoader, sampler: DistributedSampler):
