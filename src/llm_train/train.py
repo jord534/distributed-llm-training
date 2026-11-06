@@ -166,6 +166,7 @@ def val_step(
     model.eval() # this disables dropouts and prompts batchnorm to use internal statistics
     loss_sum = 0
     with torch.no_grad():
+        learned_tokens = 0
         for batch in micro_batches:
             learned_tokens += batch["n_learned"] # counting inside the loop so that the DataLoader object is only run through once per val step
             labels = batch["labels"].to(model.device)

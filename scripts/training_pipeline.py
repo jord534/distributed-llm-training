@@ -87,6 +87,9 @@ def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
 
 
 def training_launcher(train_config: str):
+    # This reads the config
+    # and goes througha all steps to start training
+
     train_cfg = Path(train_config)
     if not train_cfg.exists():
         raise FileNotFoundError(f"The following config file was not found: {train_cfg}")
@@ -107,7 +110,7 @@ def training_launcher(train_config: str):
 
         this_run_dir = tmp_dir / run_name
         
-        copy_audit_and_config(train_cfg, this_run_dir, config)
+        copy_audit_and_config(this_run_dir, config)
 
         # set seed
         seed = config["seed"]
@@ -134,7 +137,6 @@ def training_launcher(train_config: str):
 
 
         # copy all from temp dir to actual dir
-        perm_run_dir.mkdir(parents=True, exist_ok=True)
         shutil.move(str(this_run_dir), str(perm_run_dir))
 
     log_path = perm_run_dir / "log.jsonl"
