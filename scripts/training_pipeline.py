@@ -142,6 +142,9 @@ def training_launcher(train_config: str):
     train_sampler, train_loader = get_sampler_loader(train_set, seed, micro_batch_size, get_batch_from_examples)
     train_batches = batches_on_tap(train_loader, train_sampler)
 
+    val_loader = DataLoader(val_set, batch_size=micro_batch_size, shuffle=False, collate_fn=get_batch_from_examples, drop_last=False)
+    # val only needs a loader as we are going through all val exmaples each time we run val_step
+
     for step in range(total_steps):
 
         # prepare the micro_batches
@@ -161,7 +164,7 @@ def training_launcher(train_config: str):
             file.write(json.dumps(log) + "\n")
 
         if (step + 1) % eval_every == 0:
-            val_loss = val_step(model, val_set, autocast)
+            val_loss = val_step(model, val_loader, autocast)
             val_log = {"step": step +1, "val_loss": val_loss}
             with open(log_path, "a") as file:
                 file.write(json.dumps(val_log) + "\n")

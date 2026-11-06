@@ -6,6 +6,7 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers import Mistral3ForConditionalGeneration
 import time
 import math
+from torch.utils.data import DataLoader
 
 def set_seed(seed: int):
     # every source of randomness depends on the seed: model init, data order, dropout
@@ -159,14 +160,14 @@ def training_step(
 
 def val_step(
         model: Mistral3ForConditionalGeneration,
-        micro_batches: list, 
+        micro_batches: DataLoader, 
         use_autocast: bool, # to enable mixed precision for a quick forward pass and accurate loss and grad
     ):
     model.eval() # this disables dropouts and prompts batchnorm to use internal statistics
-    learned_tokens = sum([batch["n_learned"] for batch in micro_batches])
     loss_sum = 0
     with torch.no_grad():
         for batch in micro_batches:
+            learned_tokens += batch["n_learned"] # counting inside the loop so that the DataLoader object is only run through once per val step
             labels = batch["labels"].to(model.device)
             input_ids = batch["input_ids"].to(model.device)
             attn_mask = batch["attention_mask"].to(model.device)
