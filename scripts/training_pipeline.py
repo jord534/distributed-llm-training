@@ -37,7 +37,7 @@ def copy_audit_and_config(train_cfg, this_run_dir, config):
         raise e
     # copy the config file there
     with open(this_run_dir / "config.yaml", "w") as file:
-        json.dump(train_cfg)
+        yaml.dump(config, file)
 
     # run the environment audit
     audit_file = get_audit()
@@ -111,7 +111,7 @@ def training_launcher(train_config: str):
     activate_checkpointing = train["activate_checkpointing"]
     eval_every = train["eval_every"]
     micro_batch_size = train["micro_batch_size"]
-    accumulation_step = train["accumulation_step"]
+    accumulation_steps = train["accumulation_steps"]
 
     log_path = this_run_dir / "log.jsonl"
 
@@ -119,11 +119,11 @@ def training_launcher(train_config: str):
     for step in range(total_steps):
         # prepare the mini batch:
         mini_batches = [] 
-        for _ in range(accumulation_step):
-            examples = [train_set[j] for j in range(i, i+ micro_batch_size)]
+        for _ in range(accumulation_steps):
+            examples = [train_set[j % len(train_set)] for j in range(i, i + micro_batch_size)]
+            i += micro_batch_size
             batch = get_batch_from_examples(examples)
             mini_batches.append(batch)
-            i += micro_batch_size
 
         log = training_step(
             model,
@@ -140,7 +140,8 @@ def training_launcher(train_config: str):
         if (step + 1) % eval_every == 0:
             val_mini_batches = []
             for k in range(0, len(val_set), micro_batch_size):
-                val_examples = [val_set[j] for j in range(k, k+ micro_batch_size)]
+                end_idx = min(k + micro_batch_size, len(val_set))
+                val_examples = [val_set[j] for j in range(k, end_idx)]
                 val_batch = get_batch_from_examples(val_examples)
                 val_mini_batches.append(val_batch)
 
