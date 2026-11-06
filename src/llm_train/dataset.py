@@ -24,6 +24,9 @@ def get_dataset(set_name: str, revision: str, split: str,
         split=split,
         cache_dir=cache_dir,
     )
+
+    # check for conversation validity and remove broken ones
+    dataset = dataset.filter(lambda row: is_valid_convo(row["messages"]))
     
     # shuffle
     dataset = dataset.shuffle(seed)
@@ -39,6 +42,30 @@ def get_dataset(set_name: str, revision: str, split: str,
     val = list(zip(splits["test"]["prompt_id"], splits["test"]["messages"]))
     return train, val
 
+def is_valid_convo(convo : list) -> bool:
+    expected_role = {0:"user", 1:"assistant"}
+    k = 0
+    if len(convo) < 1:
+        return False
+    for msg in convo:
+        try:
+            content = msg["content"]
+        except KeyError:
+            return False
+        try:
+            role = msg["role"]
+        except KeyError:
+            return False
+        if content.strip() == "":
+            return False
+        if role.strip() == "":
+            return False
+        if role != expected_role[k%2] :
+            return False
+        k += 1
+    if role != "assistant":
+        return False
+    return True
 
 def get_truncated_convo(prompt_id, convo, max_len, tokenizer):
     token_list = get_tokens_from_convo(convo, tokenizer) # TOKENIZING STEP
