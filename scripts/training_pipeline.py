@@ -131,7 +131,7 @@ def training_launcher(train_config: str):
         model, lm_trainable = instantiate_model(config)
 
         # Write the number of trainable LM parameters down:
-        with open(this_run_dir / "lm_trainable.json", "r") as file:
+        with open(this_run_dir / "lm_trainable.json", "w") as file:
             json.dump(lm_trainable, file)
 
         # read cached data
