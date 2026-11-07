@@ -78,11 +78,11 @@ def instantiate_model(config) -> Mistral3ForConditionalGeneration:
     if model_cfg["kind"] == "dev":
         text_dims = config["dev_dims"]["text_dims"]
         vision_dims = config["dev_dims"]["vision_dims"]
-        model = create_dev_model(model_id, revision, device, text_dims, vision_dims, dtype)
+        model, lm_trainable = create_dev_model(model_id, revision, device, text_dims, vision_dims, dtype)
     else:
-        model = load_model(model_id, revision, device, dtype)
+        model, lm_trainable = load_model(model_id, revision, device, dtype)
 
-    return model
+    return model, lm_trainable
 
 def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
     train = config["train"]
@@ -128,7 +128,11 @@ def training_launcher(train_config: str):
 
         # instantiate model
         print("Instantiate model... \n")
-        model = instantiate_model(config)
+        model, lm_trainable = instantiate_model(config)
+
+        # Write the number of trainable LM parameters down:
+        with open(this_run_dir / "lm_trainable.json", "r") as file:
+            json.dump(lm_trainable, file)
 
         # read cached data
         print("Reading cached data for training...\n")

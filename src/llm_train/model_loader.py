@@ -88,7 +88,7 @@ def type_check_and_freeze_check(dtype_counts, param_category, wrong_dtype_names,
     for cat, (numel, trainable) in param_category.items():
         if cat not in LANGUAGE_MODEL_CATEGORIES and trainable > 0:
             raise RuntimeError(f"Found {trainable} non frozen params (out of {numel}) in {cat}.")
-    return None
+    return lm_trainable
 
 
 def load_tokenizer(model_id: str, revision: str, mode: str) -> MistralCommonBackend:
@@ -115,11 +115,11 @@ def load_model(model_id, model_revision, device, dtype: torch.dtype):
     check_for_missing_or_unexpected_param(loading_info)
     freeze_vision(model)
     dtype_counts, param_category, wrong_dtype_names = param_type_count(model, dtype)
-    type_check_and_freeze_check(dtype_counts, param_category, wrong_dtype_names, dtype)
+    lm_trainable = type_check_and_freeze_check(dtype_counts, param_category, wrong_dtype_names, dtype)
 
     model = model.to(device)
 
-    return model
+    return model, lm_trainable
 
 def shrink_sub_config(sub_config, dims: dict, name: str):
     # dims maps a config field to its reduced value, e.g. {"num_hidden_layers": 2, "hidden_size": 256}
@@ -164,8 +164,8 @@ def create_dev_model(model_id, model_revision, device, text_dims: dict, vision_d
     # same guarantees as load_model
     freeze_vision(model)
     dtype_counts, param_category, wrong_dtype_names = param_type_count(model, dtype)
-    type_check_and_freeze_check(dtype_counts, param_category, wrong_dtype_names, dtype)
+    lm_trainable = type_check_and_freeze_check(dtype_counts, param_category, wrong_dtype_names, dtype)
 
     model = model.to(device)
 
-    return model
+    return model, lm_trainable
