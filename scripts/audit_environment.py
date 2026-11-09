@@ -87,6 +87,8 @@ def audit_torch(report_file):
     if cuda_av:
         bf_support = torch.cuda.is_bf16_supported()
         print("Torch supports bf16:", bf_support)
+        print(f"CUDA device : {torch.cuda.get_device_name(0)}")
+        print(f"CUDA architecture : {torch.cuda.get_arch_list()}")
 
     # Append torch details to file
     with open(report_file, "a", encoding="utf-8") as f:
@@ -96,6 +98,8 @@ def audit_torch(report_file):
         f.write(f"Is CUDA Available: {cuda_av}\n")
         if cuda_av:
             f.write(f"Torch supports bf16: {bf_support}\n")
+            f.write(f"CUDA device : {torch.cuda.get_device_name(0)}")
+            f.write(f"CUDA architecture : {torch.cuda.get_arch_list()}")
         else:
             f.write("Torch supports bf16: N/A\n")
         f.write("\n")
