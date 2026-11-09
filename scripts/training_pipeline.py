@@ -192,11 +192,15 @@ def training_launcher(train_config: str):
         )
         steptimes.append(log["step_time_s"])
         if len(steptimes)<20:
-            eta = sum(steptimes)/len(steptimes)
+            steptime_ravg = sum(steptimes)/len(steptimes)
         else:
-            eta = sum(steptimes[-20:])/20
-        
-        print(f"Step [{step}/{total_steps}] (ETA: {(total_steps-step)*eta/60}min): {log}\n")
+            steptime_ravg = sum(steptimes[-20:])/20
+
+        eta = (total_steps-step)*eta # total seconds
+        eta_min = eta // 60
+        eta_secs = int((eta - eta_min)*60)
+
+        print(f"Step [{step}/{total_steps}] (ETA: {eta_min}min{eta_secs}s): {log}\n")
         # save log line
         with open(log_path, "a") as file:
             file.write(json.dumps(log) + "\n")
