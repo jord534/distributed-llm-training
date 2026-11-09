@@ -137,7 +137,7 @@ def training_step(
                 model_output = model(input_ids=input_ids, attention_mask = attn_mask) # forward pass
             logits = model_output.logits
             loss = get_loss(logits, labels, learned_tokens)
-            total_loss += loss.item()
+            total_loss += loss.item() * world_size
             loss.backward()
     
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)

@@ -93,6 +93,10 @@ def instantiate_model(config, world_size:int, local_rank:int) -> Mistral3ForCond
     else:
         model, lm_trainable = load_model(model_id, revision, device, dtype)
 
+    activation_checkpointing = config["train"]["activation_checkpointing"]
+    if activation_checkpointing:
+        model.gradient_checkpointing_enable() # this needs to happen before wrapping
+
     if world_size > 1:
         model = wrap_model_ddp(model, local_rank)
     
@@ -112,7 +116,6 @@ def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
 def training_launcher(train_config: str):
     # This reads the config
     # and goes througha all steps to start training
-
     train_cfg = Path(train_config)
     if not train_cfg.exists():
         raise FileNotFoundError(f"The following config file was not found: {train_cfg}")
@@ -122,28 +125,28 @@ def training_launcher(train_config: str):
         config = yaml.safe_load(file)
     # check artifacts/run exists, if not create a temp dir and copy all in the actual dir at the end (to catch exceptions)
     run_name = config["run_name"]
-    perm_run_dir = run_dir / run_name
+    # Get rank and world_size from the torch run group:
+    group = open_group(torch.device(config["device"]))
+    rank = group["rank"]
+    local_rank = group["local_rank"]
+    world_size = group["world_size"]
 
-    if perm_run_dir.exists():
-        raise FileExistsError(f"Run already exists: {perm_run_dir}")
+    if world_size > 1 and rank == 0:
+        perm_run_dir = run_dir / run_name
 
-    
+        if perm_run_dir.exists():
+            raise FileExistsError(f"Run already exists: {perm_run_dir}")
+
     with tempfile.TemporaryDirectory() as tmp_dir :
         tmp_dir = Path(tmp_dir)
         this_run_dir = tmp_dir / run_name
         
-        copy_audit_and_config(this_run_dir, train_cfg)
+        group_single_action(lambda: copy_audit_and_config(this_run_dir, train_cfg), rank)
 
         # set seed
         print("Setting seed...\n")
         seed = config["seed"]
         set_seed(seed)
-
-        # Get rank and world_size from the torch run group:
-        group = open_group()
-        rank = group["rank"]
-        local_rank = group["local_rank"]
-        world_size = group["world_size"]
 
         # instantiate model
         print("Instantiate model... \n")
@@ -171,14 +174,9 @@ def training_launcher(train_config: str):
         train = config["train"]
         max_grad_norm = train["max_grad_norm"]
         autocast = train["autocast"]
-        activation_checkpointing = train["activation_checkpointing"]
         eval_every = train["eval_every"]
         micro_batch_size = train["micro_batch_size"]
         accumulation_steps = train["accumulation_steps"]
-
-        if activation_checkpointing:
-            model.gradient_checkpointing_enable()
-
 
         # copy all from temp dir to actual dir
         shutil.move(str(this_run_dir), str(perm_run_dir))
@@ -219,20 +217,24 @@ def training_launcher(train_config: str):
         )
         # should we have DDP we aggregate the loss from all of them to log it
         log["loss"] = sum_accross_gpus(log["loss"], model.device)
+        log["tokens"] = sum_accross_gpus(log["tokens"], model.device)
+        log["peak_memory_gb"] = max_accross_gpus(log["peak_memory_gb"], model.device)
 
         # we need to find the max of all processes step times for the ETA
         steptimes.append(
             max_accross_gpus(log["step_time_s"], model.device)
         )
 
-        group_single_action(write_log) # update the .jsonl and the shell on just one GPU (it aggregated all metrics)
+        group_single_action(lambda: write_log(log, log_path, total_steps, step, steptimes)) # update the .jsonl and the shell on just one GPU (it aggregated all metrics)
 
         if (step + 1) % eval_every == 0:
             val_loss = val_step(model, val_loader, autocast)
             val_log = {"step": step +1, "val_loss": val_loss}
-            print(f"[VALIDATION AT STEP {step +1}]: {val_loss}\n")
-            with open(log_path, "a") as file:
-                file.write(json.dumps(val_log) + "\n")
+            group_single_action(
+                lambda: log_val(val_log, log_path, val_loss, step)
+            )
+            
+            
 
     close_group() # closing our torchrun group
     print("Training concluded.")
@@ -254,6 +256,11 @@ def write_log(log, log_path, total_steps, step, steptimes):
     # save log line
     with open(log_path, "a") as file:
         file.write(json.dumps(log) + "\n")
+
+def log_val(val_log, log_path, val_loss, step):
+    print(f"[VALIDATION AT STEP {step + 1}]: {val_loss}\n")
+    with open(log_path, "a") as file:
+        file.write(json.dumps(val_log) + "\n")
 
 
 def batches_on_tap(loader: DataLoader, sampler: DistributedSampler):
