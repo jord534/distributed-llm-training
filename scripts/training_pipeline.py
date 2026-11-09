@@ -112,6 +112,10 @@ def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
     optimizer, scheduler = get_optimizer_and_lr_scheduler(model.parameters(), lr, weight_decay, warmup_steps, total_steps)
     return optimizer, scheduler, total_steps
 
+def write_trainable_params_number(this_run_dir, lm_trainable):
+    with open(this_run_dir / "lm_trainable.json", "w") as file:
+        json.dump(lm_trainable, file)
+
 
 def training_launcher(train_config: str):
     # This reads the config
@@ -153,8 +157,7 @@ def training_launcher(train_config: str):
         model, lm_trainable = instantiate_model(config, world_size, local_rank)
 
         # Write the number of trainable LM parameters down:
-        with open(this_run_dir / "lm_trainable.json", "w") as file:
-            group_single_action(lambda: json.dump(lm_trainable, file), rank)
+        group_single_action(lambda : write_trainable_params_number(this_run_dir, lm_trainable), rank)
 
         # read cached data
         print("Reading cached data for training...\n")
@@ -226,7 +229,7 @@ def training_launcher(train_config: str):
             max_accross_gpus(log["step_time_s"], model.device)
         )
 
-        group_single_action(lambda: write_log(log, log_path, total_steps, step, steptimes)) # update the .jsonl and the shell on just one GPU (it aggregated all metrics)
+        group_single_action(lambda: write_log(log, log_path, total_steps, step, steptimes), rank) # update the .jsonl and the shell on just one GPU (it aggregated all metrics)
 
         if (step + 1) % eval_every == 0:
             val_loss = val_step(model, val_loader, autocast)

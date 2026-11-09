@@ -136,9 +136,9 @@ def training_step(
             with torch.autocast(device_type=model.device.type, dtype=torch.bfloat16, enabled = use_autocast): # mixed precision
                 model_output = model(input_ids=input_ids, attention_mask = attn_mask) # forward pass
             logits = model_output.logits
-            loss = get_loss(logits, labels, learned_tokens) * world_size # we update the actuall loss
+            loss = get_loss(logits, labels, learned_tokens)
             total_loss += loss.item() 
-            loss.backward()
+            (loss*world_size).backward() # the backward pass should account for the whole loss from the whole world
     
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
     # checking the grad and the loss are < inf:
