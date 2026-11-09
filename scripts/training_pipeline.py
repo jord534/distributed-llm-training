@@ -196,7 +196,7 @@ def training_launcher(train_config: str):
         else:
             steptime_ravg = sum(steptimes[-20:])/20
 
-        eta = (total_steps-step)*eta # total seconds
+        eta = (total_steps-step)*steptime_ravg # total seconds
         eta_min = eta // 60
         eta_secs = int((eta - eta_min)*60)
 
