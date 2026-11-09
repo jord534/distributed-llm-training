@@ -229,6 +229,6 @@ def get_sampler_loader(dataset, seed, micro_batch_size, fn):
 if __name__ == "__main__":
     
     if len(sys.argv) != 2:
-            raise SystemExit("Usage: uv run python scripts/training_pipeline.py <trianing config path>")
+        raise SystemExit("Usage: uv run python scripts/training_pipeline.py <trianing config path>")
     train_config = sys.argv[1]
     training_launcher(train_config)
