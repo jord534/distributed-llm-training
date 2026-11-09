@@ -7,6 +7,11 @@ from transformers import Mistral3ForConditionalGeneration
 import time
 import math
 from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel
+from llm_train.distributed import (
+    sum_accross_gpus,
+)
+from contextlib import nullcontext
 
 def set_seed(seed: int):
     # every source of randomness depends on the seed: model init, data order, dropout
@@ -96,12 +101,13 @@ def get_optimizer_and_lr_scheduler(params, lr, weight_decay, warmup_step, total_
 
 
 def training_step(
-        model: Mistral3ForConditionalGeneration,
+        model: Mistral3ForConditionalGeneration | DistributedDataParallel,
         micro_batches: list, 
         optimizer: torch.optim.AdamW, 
         scheduler: torch.optim.lr_scheduler.LambdaLR, 
         max_grad_norm: float, 
         use_autocast: bool, # to enable mixed precision for a quick forward pass and accurate loss and grad
+        world_size: int,
     ):
     
     model.train()
@@ -118,17 +124,22 @@ def training_step(
     learned_tokens = sum([batch["n_learned"] for batch in micro_batches])
     total_tokens = sum([batch["n_tokens"] for batch in micro_batches])
     total_loss = 0
-    for batch in micro_batches:
-        labels = batch["labels"].to(model.device)
-        input_ids = batch["input_ids"].to(model.device)
-        attn_mask = batch["attention_mask"].to(model.device)
-        with torch.autocast(device_type=model.device.type, dtype=torch.bfloat16, enabled = use_autocast): # mixed precision
-            model_output = model(input_ids=input_ids, attention_mask = attn_mask) # forward pass
-        logits = model_output.logits
-        loss = get_loss(logits, labels, learned_tokens)
-        total_loss += loss.item()
-        loss.backward()
-        
+    if world_size > 1:
+        learned_tokens = sum_accross_gpus(learned_tokens, model.device) # for DDP we will compute the average loss over all tokens involved accross GPUs
+
+    for i, batch in enumerate(micro_batches):
+        model_sync_condition = model.no_sync() if i < len(micro_batches) - 1 else nullcontext() # only sync the gradient once since it accumulates
+        with model_sync_condition:
+            labels = batch["labels"].to(model.device)
+            input_ids = batch["input_ids"].to(model.device)
+            attn_mask = batch["attention_mask"].to(model.device)
+            with torch.autocast(device_type=model.device.type, dtype=torch.bfloat16, enabled = use_autocast): # mixed precision
+                model_output = model(input_ids=input_ids, attention_mask = attn_mask) # forward pass
+            logits = model_output.logits
+            loss = get_loss(logits, labels, learned_tokens)
+            total_loss += loss.item()
+            loss.backward()
+    
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
     # checking the grad and the loss are < inf:
     if not torch.isfinite(grad_norm) :
@@ -159,7 +170,7 @@ def training_step(
     }
 
 def val_step(
-        model: Mistral3ForConditionalGeneration,
+        model: Mistral3ForConditionalGeneration | DistributedDataParallel,
         micro_batches: DataLoader, 
         use_autocast: bool, # to enable mixed precision for a quick forward pass and accurate loss and grad
     ):

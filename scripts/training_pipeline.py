@@ -36,7 +36,11 @@ from llm_train.dataset import (
 
 from llm_train.distributed import (
     open_group,
-    close_group
+    close_group,
+    wrap_model_ddp,
+    sum_accross_gpus,
+    max_accross_gpus,
+    group_single_action
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -69,7 +73,7 @@ def copy_audit_and_config(this_run_dir, train_cfg):
     shutil.copyfile(audit_file, this_run_dir /  "environment.txt")
     return None
 
-def instantiate_model(config) -> Mistral3ForConditionalGeneration:
+def instantiate_model(config, world_size:int, local_rank:int) -> Mistral3ForConditionalGeneration:
     # instantiate model
     device = torch.device(config["device"])
     model_cfg = config["model"]
@@ -89,6 +93,9 @@ def instantiate_model(config) -> Mistral3ForConditionalGeneration:
     else:
         model, lm_trainable = load_model(model_id, revision, device, dtype)
 
+    if world_size > 1:
+        model = wrap_model_ddp(model, local_rank)
+    
     return model, lm_trainable
 
 def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
@@ -123,7 +130,6 @@ def training_launcher(train_config: str):
     
     with tempfile.TemporaryDirectory() as tmp_dir :
         tmp_dir = Path(tmp_dir)
-
         this_run_dir = tmp_dir / run_name
         
         copy_audit_and_config(this_run_dir, train_cfg)
@@ -133,9 +139,15 @@ def training_launcher(train_config: str):
         seed = config["seed"]
         set_seed(seed)
 
+        # Get rank and world_size from the torch run group:
+        group = open_group()
+        rank = group["rank"]
+        local_rank = group["local_rank"]
+        world_size = group["world_size"]
+
         # instantiate model
         print("Instantiate model... \n")
-        model, lm_trainable = instantiate_model(config)
+        model, lm_trainable = instantiate_model(config, world_size, local_rank)
 
         # Write the number of trainable LM parameters down:
         with open(this_run_dir / "lm_trainable.json", "w") as file:
@@ -173,11 +185,6 @@ def training_launcher(train_config: str):
 
     log_path = perm_run_dir / "log.jsonl"
 
-    # Get rank and world_size from the torch run group:
-    group = open_group()
-    rank = group["rank"]
-    world_size = group["world_size"]
-
     print("Getting sampler and loader ready to serve batches... \n")
     train_sampler, train_loader = get_sampler_loader(
         train_set, 
@@ -207,23 +214,18 @@ def training_launcher(train_config: str):
             optimizer,
             scheduler,
             max_grad_norm,
-            autocast
+            autocast,
+            world_size
         )
-        steptimes.append(log["step_time_s"])
-        if len(steptimes)<20:
-            steptime_ravg = sum(steptimes)/len(steptimes)
-        else:
-            steptime_ravg = sum(steptimes[-20:])/20
+        # should we have DDP we aggregate the loss from all of them to log it
+        log["loss"] = sum_accross_gpus(log["loss"], model.device)
 
-        eta = (total_steps-step)*steptime_ravg # total seconds
-        eta_min = eta // 60
-        eta_secs = int((eta - eta_min)*60)
+        # we need to find the max of all processes step times for the ETA
+        steptimes.append(
+            max_accross_gpus(log["step_time_s"], model.device)
+        )
 
-        print(f"Step [{step}/{total_steps}] (ETA: {eta_min}min{eta_secs}s): {log}\n")
-        # save log line
-        with open(log_path, "a") as file:
-            file.write(json.dumps(log) + "\n")
-
+        group_single_action(write_log) # update the .jsonl and the shell on just one GPU (it aggregated all metrics)
 
         if (step + 1) % eval_every == 0:
             val_loss = val_step(model, val_loader, autocast)
@@ -232,8 +234,26 @@ def training_launcher(train_config: str):
             with open(log_path, "a") as file:
                 file.write(json.dumps(val_log) + "\n")
 
+    close_group() # closing our torchrun group
     print("Training concluded.")
     print("="*40)
+
+
+def write_log(log, log_path, total_steps, step, steptimes):
+    if len(steptimes)<20:
+        steptime_ravg = sum(steptimes)/len(steptimes)
+    else:
+        steptime_ravg = sum(steptimes[-20:])/20
+
+    eta = (total_steps-step)*steptime_ravg # total seconds
+    eta_min = eta // 60
+    eta_secs = int((eta - eta_min)*60)
+
+    print(f"Step [{step}/{total_steps}] (ETA: {eta_min}min{eta_secs}s): {log}\n")
+    
+    # save log line
+    with open(log_path, "a") as file:
+        file.write(json.dumps(log) + "\n")
 
 
 def batches_on_tap(loader: DataLoader, sampler: DistributedSampler):

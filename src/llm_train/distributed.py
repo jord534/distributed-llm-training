@@ -1,6 +1,8 @@
 import os
 import torch
 import datetime
+from transformers import Mistral3ForConditionalGeneration
+from torch.nn.parallel import DistributedDataParallel
 
 from typing import Callable
 
@@ -52,7 +54,19 @@ def sum_accross_gpus(val: int | float, device: torch.device):
     torch.distributed.all_reduce(tsr, op = torch.distributed.ReduceOp.SUM)
     return tsr.item()
 
+
+def max_accross_gpus(val: int | float, device: torch.device):
+    if not torch.distributed.is_initialized():
+        return val
+    tsr = torch.tensor(val, device = device)
+    torch.distributed.all_reduce(tsr, op = torch.distributed.ReduceOp.MAX)
+    return tsr.item()
+
 def group_single_action(action: Callable, rank: int):
     if rank == 0:
         action()
-    
+
+
+
+def wrap_model_ddp(model: Mistral3ForConditionalGeneration, local_rank: int)-> DistributedDataParallel:
+    return DistributedDataParallel(model, device_ids = [local_rank])
