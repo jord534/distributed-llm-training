@@ -15,6 +15,8 @@ import tempfile
 import itertools
 from torch.utils.data import DataLoader, DistributedSampler
 
+from typing import Callable, Tuple
+
 from llm_train.train import (
     set_seed,
     get_optimizer_and_lr_scheduler,
@@ -30,6 +32,11 @@ from llm_train.model_loader import (
 
 from llm_train.dataset import (
     read_cached_data
+)
+
+from llm_train.distributed import (
+    open_group,
+    close_group
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -166,8 +173,20 @@ def training_launcher(train_config: str):
 
     log_path = perm_run_dir / "log.jsonl"
 
-    print("GEtting sampler and loader ready to serve batches... \n")
-    train_sampler, train_loader = get_sampler_loader(train_set, seed, micro_batch_size, get_batch_from_examples)
+    # Get rank and world_size from the torch run group:
+    group = open_group()
+    rank = group["rank"]
+    world_size = group["world_size"]
+
+    print("Getting sampler and loader ready to serve batches... \n")
+    train_sampler, train_loader = get_sampler_loader(
+        train_set, 
+        seed, 
+        micro_batch_size, 
+        get_batch_from_examples, 
+        rank, 
+        world_size
+    )
     train_batches = batches_on_tap(train_loader, train_sampler)
 
     val_loader = DataLoader(val_set, batch_size=micro_batch_size, shuffle=False, collate_fn=get_batch_from_examples, drop_last=False)
@@ -223,8 +242,8 @@ def batches_on_tap(loader: DataLoader, sampler: DistributedSampler):
         sampler.set_epoch(epoch)   # each time the yield returns the end, we iterate over this loop and start a new epoch.
         yield from loader # loader gives batches of size micro_batch_size and collates them using our specified function
 
-def get_sampler_loader(dataset, seed, micro_batch_size, fn):
-    sampler = DistributedSampler(dataset, num_replicas=1, rank=0,
+def get_sampler_loader(dataset: Dataset, seed: int, micro_batch_size: int, fn: Callable, rank: int, world_size:int) -> Tuple[DistributedSampler, DataLoader]:
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank,
                                  shuffle=True, seed=seed, drop_last=True)
     loader = DataLoader(dataset, batch_size=micro_batch_size, sampler=sampler,
                         collate_fn=fn, drop_last=True)
