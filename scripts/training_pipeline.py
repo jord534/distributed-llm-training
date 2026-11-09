@@ -131,9 +131,9 @@ def training_launcher(train_config: str):
     local_rank = group["local_rank"]
     world_size = group["world_size"]
 
-    if world_size > 1 and rank == 0:
-        perm_run_dir = run_dir / run_name
+    perm_run_dir = run_dir / run_name
 
+    if rank == 0:
         if perm_run_dir.exists():
             raise FileExistsError(f"Run already exists: {perm_run_dir}")
 
@@ -154,7 +154,7 @@ def training_launcher(train_config: str):
 
         # Write the number of trainable LM parameters down:
         with open(this_run_dir / "lm_trainable.json", "w") as file:
-            json.dump(lm_trainable, file)
+            group_single_action(lambda: json.dump(lm_trainable, file), rank)
 
         # read cached data
         print("Reading cached data for training...\n")
@@ -179,7 +179,7 @@ def training_launcher(train_config: str):
         accumulation_steps = train["accumulation_steps"]
 
         # copy all from temp dir to actual dir
-        shutil.move(str(this_run_dir), str(perm_run_dir))
+        group_single_action(lambda: shutil.move(str(this_run_dir), str(perm_run_dir)))
 
     log_path = perm_run_dir / "log.jsonl"
 
@@ -218,7 +218,8 @@ def training_launcher(train_config: str):
         # should we have DDP we aggregate the loss from all of them to log it
         log["loss"] = sum_accross_gpus(log["loss"], model.device)
         log["tokens"] = sum_accross_gpus(log["tokens"], model.device)
-        log["peak_memory_gb"] = max_accross_gpus(log["peak_memory_gb"], model.device)
+        if log["peak_memory_gb"] is not None:
+            log["peak_memory_gb"] = max_accross_gpus(log["peak_memory_gb"], model.device)
 
         # we need to find the max of all processes step times for the ETA
         steptimes.append(

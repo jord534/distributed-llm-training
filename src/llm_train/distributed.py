@@ -67,6 +67,6 @@ def group_single_action(action: Callable, rank: int):
         action()
 
 def wrap_model_ddp(model: Mistral3ForConditionalGeneration, local_rank: int)-> DistributedDataParallel:
-    if model.device != "cpu":
+    if model.device != torch.device("cpu"):
         return DistributedDataParallel(model, device_ids = [local_rank])
     return DistributedDataParallel(model)
