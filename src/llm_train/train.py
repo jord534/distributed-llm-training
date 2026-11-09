@@ -128,7 +128,7 @@ def training_step(
         learned_tokens = sum_accross_gpus(learned_tokens, model.device) # for DDP we will compute the average loss over all tokens involved accross GPUs
 
     for i, batch in enumerate(micro_batches):
-        model_sync_condition = model.no_sync() if i < len(micro_batches) - 1 else nullcontext() # only sync the gradient once since it accumulates
+        model_sync_condition = model.no_sync() if (i < len(micro_batches) - 1 and world_size > 1) else nullcontext() # only sync the gradient once since it accumulates
         with model_sync_condition:
             labels = batch["labels"].to(model.device)
             input_ids = batch["input_ids"].to(model.device)
