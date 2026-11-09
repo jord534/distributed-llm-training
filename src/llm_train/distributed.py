@@ -41,3 +41,11 @@ def close_group():
     if not torch.distributed.is_initialized():
         return None
     torch.distributed.destroy_process_group()
+
+
+def sum_accross_processes(val: int | float, device: torch.device):
+    if not torch.distributed.is_initialized():
+        return val
+    tsr = torch.tensor(val, device=device)
+    torch.distributed.all_reduce(tsr, op = torch.distributed.ReduceOp.SUM)
+    return tsr.item()
