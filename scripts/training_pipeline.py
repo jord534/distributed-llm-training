@@ -182,7 +182,7 @@ def training_launcher(train_config: str):
         accumulation_steps = train["accumulation_steps"]
 
         # copy all from temp dir to actual dir
-        group_single_action(lambda: shutil.move(str(this_run_dir), str(perm_run_dir)))
+        group_single_action(lambda: shutil.move(str(this_run_dir), str(perm_run_dir)), rank)
 
     log_path = perm_run_dir / "log.jsonl"
 
@@ -252,8 +252,8 @@ def write_log(log, log_path, total_steps, step, steptimes):
         steptime_ravg = sum(steptimes[-20:])/20
 
     eta = (total_steps-step)*steptime_ravg # total seconds
-    eta_min = eta // 60
-    eta_secs = int((eta - eta_min)*60)
+    eta_min = int(eta // 60)
+    eta_secs = int(eta % 60)
 
     print(f"Step [{step}/{total_steps}] (ETA: {eta_min}min{eta_secs}s): {log}\n")
     
