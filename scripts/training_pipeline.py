@@ -105,7 +105,7 @@ def instantiate_model(config, world_size:int, local_rank:int) -> Mistral3ForCond
 
     if world_size > 1:
         model = wrap_model_ddp(model, local_rank)
-    
+
     return model, lm_trainable
 
 def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
@@ -133,6 +133,23 @@ def write_checkpoint(save_dir:Path, model: Mistral3ForConditionalGeneration, opt
 
     return None
 
+def checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, world_size):
+    # This assesses that latest_ckpt_folder holds all necessary files
+    # raises if not
+    files = {"model.pt": None, "optimizer.pt": None, "scheduler.pt": None, "trainer.json": None}
+    if world_size > 0:
+        for k in range(world_size):
+            files[f"rng_rank{k}.pt"] = None
+
+    for file in files.keys():
+        file_path = ckpt_dir / latest_ckpt_folder / file
+        if not file_path.exists():
+            raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {file}")
+        files[file] = file_path
+    return files
+
+
+
 def training_launcher(train_config: str):
     # This reads the config
     # and goes througha all steps to start training
@@ -152,42 +169,67 @@ def training_launcher(train_config: str):
     world_size = group["world_size"]
 
     perm_run_dir = run_dir / run_name
+    resuming = False
 
     if rank == 0: # if another GPU checks it an error will be raised for the previous GPU created it
         if perm_run_dir.exists():
-            raise FileExistsError(f"Run already exists: {perm_run_dir}")
+            # Check whether checkpoint folders exist
+            ckpt_dir = perm_run_dir / "checkpoints"
+            if not ckpt_dir.exists():
+                raise FileNotFoundError("Existing run with this name found but no checkpoint was found.")
+            dir_list = os.listdir(ckpt_dir)
+            step_dirs = [(folder_name, int(folder_name[5:])) for folder_name in dir_list if (folder_name.startswith("step_") and folder_name[5:].isdigit())]
+            if len(step_dirs)==0:
+                raise FileExistsError(f"Run already exists and does not have resumable checkpoint: {perm_run_dir}")
+            resuming = True
+            latest_ckpt_folder , ckpt_step_nb = sorted(step_dirs, key = lambda fld: fld[1])[-1] # returns (folder_name, step_number) and we need only the folder name
+            # check we have all necessary .pt and json files
+            pt_paths = checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, world_size)
 
     with tempfile.TemporaryDirectory() as tmp_dir :
-        tmp_dir = Path(tmp_dir)
-        this_run_dir = tmp_dir / run_name
+        if not resuming:
+            tmp_dir = Path(tmp_dir)
+            this_run_dir = tmp_dir / run_name
         
-        group_single_action(lambda: copy_audit_and_config(this_run_dir, train_cfg), rank)
+            group_single_action(lambda: copy_audit_and_config(this_run_dir, train_cfg), rank)
 
-        # set seed
-        print("Setting seed...\n")
-        seed = config["seed"]
-        set_seed(seed)
+            # set seed
+            print("Setting seed...\n")
+            seed = config["seed"]
+            set_seed(seed)
 
-        # instantiate model
-        print("Instantiate model... \n")
+            # instantiate model
+            print("Instantiate model... \n")
+            
         model, lm_trainable = instantiate_model(config, world_size, local_rank)
 
-        # Write the number of trainable LM parameters down:
-        group_single_action(lambda : write_trainable_params_number(this_run_dir, lm_trainable), rank)
+        if resuming:
+            getattr(model, "module", model).load_state_dict(torch.load(pt_paths["model.pt"]))
+            if world_size > 0 :
+                # load ranks pt
+                pass
 
-        # read cached data
-        print("Reading cached data for training...\n")
-        cache_dir = Path(config["data"]["cache"])
-        max_training_examples = config["data"]["max_train_examples"]
-        train_set, val_set, manifest = read_cached_data(REPO_ROOT / cache_dir)
-        if max_training_examples is not None:
-            if max_training_examples > len(train_set):
-                raise ValueError("Requested number of training examples exceeds available examples")
-            train_set = train_set.select(range(max_training_examples)) # allow for smaller examples to be used for testing purposes
+        # Write the number of trainable LM parameters down:
+        if not resuming:
+            group_single_action(lambda : write_trainable_params_number(this_run_dir, lm_trainable), rank)
+
+            # read cached data
+            print("Reading cached data for training...\n")
+            cache_dir = Path(config["data"]["cache"])
+            max_training_examples = config["data"]["max_train_examples"]
+            train_set, val_set, manifest = read_cached_data(REPO_ROOT / cache_dir)
+            if max_training_examples is not None:
+                if max_training_examples > len(train_set):
+                    raise ValueError("Requested number of training examples exceeds available examples")
+                train_set = train_set.select(range(max_training_examples)) # allow for smaller examples to be used for testing purposes
 
         # create optimizer
         print("Fetching optimizer and scheduler... \n")
         optimizer, scheduler, total_steps = fetch_optimizer_scheduler(config, model)
+
+        if latest_ckpt_folder is not None:
+            optimizer.load_state_dict(torch.load(pt_paths["optimizer.pt"]))
+            scheduler.load_state_dict(torch.load(pt_paths["scheduler.pt"]))
 
         # loop over training steps
         train = config["train"]
@@ -197,14 +239,22 @@ def training_launcher(train_config: str):
         micro_batch_size = train["micro_batch_size"]
         accumulation_steps = train["accumulation_steps"]
 
-        # write run manifest
-        group_single_action(lambda: write_run_metadata(config, manifest, world_size, this_run_dir), rank)
-        # copy all from temp dir to actual dir
-        group_single_action(lambda: shutil.move(str(this_run_dir), str(perm_run_dir)), rank)
+        if not resuming:
+            # write run manifest
+            group_single_action(lambda: write_run_metadata(config, manifest, world_size, this_run_dir), rank)
+            # copy all from temp dir to actual dir
+            group_single_action(lambda: shutil.move(str(this_run_dir), str(perm_run_dir)), rank)
 
     log_path = perm_run_dir / "log.jsonl"
-
+    start_step, start_epoch, n_skip_batches = 0, 0, 0
     print("Getting sampler and loader ready to serve batches... \n")
+
+    if resuming:
+        with open(pt_paths["trainer.json"], "r") as f:
+            trainer = json.load(f)
+        start_step = trainer["step"]
+        start_epoch = trainer["epoch"]
+        n_skip_batches = trainer["batches_seen_in_epoch"]
     train_sampler, train_loader = get_sampler_loader(
         train_set, 
         seed, 
@@ -213,7 +263,7 @@ def training_launcher(train_config: str):
         rank, 
         world_size
     )
-    train_batches = batches_on_tap(train_loader, train_sampler)
+    train_batches = batches_on_tap(train_loader, train_sampler, start_epoch)
 
     val_loader = DataLoader(val_set, batch_size=micro_batch_size, shuffle=False, collate_fn=get_batch_from_examples, drop_last=False)
     # val only needs a loader as we are going through all val exmaples each time we run val_step
@@ -225,8 +275,10 @@ def training_launcher(train_config: str):
         os.makedirs(checkpoints_dir, exist_ok=True)
 
     steptimes = []
-    for step in range(total_steps):
-
+        
+    for step in range(start_step, total_steps):
+        if micro_batch_size * accumulation_steps * step < n_skip_batches:
+            continue
         # prepare the micro_batches
         micro_batches = [next(train_batches) for _ in range(accumulation_steps)] 
 
@@ -311,9 +363,12 @@ def log_val(val_log, log_path, val_loss, step):
         file.write(json.dumps(val_log) + "\n")
 
 
-def batches_on_tap(loader: DataLoader, sampler: DistributedSampler):
+def batches_on_tap(loader: DataLoader, sampler: DistributedSampler, start_epoch: int):
     # loops over the data again and again, with a new shuffle each epoch
+    
     for epoch in itertools.count():
+        if epoch < start_epoch:
+            continue #we skip ahead to start_epoch
         sampler.set_epoch(epoch)   # each time the yield returns the end, we iterate over this loop and start a new epoch.
         yield from loader # loader gives batches of size micro_batch_size and collates them using our specified function
 
