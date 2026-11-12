@@ -361,7 +361,7 @@ def trim_log(log_path, start_step):
     filtered_lines = []
     for line in lines:
         if line.strip(): # non empty lines
-            if line["step"]<=start_step:
+            if json.loads(line)["step"]<=start_step:
                 filtered_lines.append(line)
     # let's overwrite the log with kept lines:
     with open(log_path, "w") as f:
@@ -398,7 +398,7 @@ def batches_on_tap(loader: DataLoader, sampler: DistributedSampler, start_epoch:
         yield from itertools.islice(loader, n_skip_batches, None) # loader gives batches of size micro_batch_size and collates them using our specified function, starts at n_skip_batches and ends at.. None :)
         n_skip_batches = 0  # only the first epoch is cut
 
-        
+
 def get_sampler_loader(dataset: Dataset, seed: int, micro_batch_size: int, fn: Callable, rank: int, world_size:int) -> Tuple[DistributedSampler, DataLoader]:
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank,
                                  shuffle=True, seed=seed, drop_last=True)
