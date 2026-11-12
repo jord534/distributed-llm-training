@@ -170,7 +170,8 @@ def training_launcher(train_config: str):
     # check artifacts/run exists, if not create a temp dir and copy all in the actual dir at the end (to catch exceptions)
     run_name = config["run_name"]
     # Get rank and world_size from the torch run group:
-    group = open_group(torch.device(config["device"]))
+    device = torch.device(config["device"])
+    group = open_group(device)
     rank = group["rank"]
     local_rank = group["local_rank"]
     world_size = group["world_size"]
@@ -200,18 +201,18 @@ def training_launcher(train_config: str):
         
             group_single_action(lambda: copy_audit_and_config(this_run_dir, train_cfg), rank)
 
-            # set seed
-            print("Setting seed...\n")
-            seed = config["seed"]
-            set_seed(seed)
+        # set seed
+        print("Setting seed...\n")
+        seed = config["seed"]
+        set_seed(seed)
 
-            # instantiate model
-            print("Instantiate model... \n")
+        # instantiate model
+        print("Instantiate model... \n")
             
         model, lm_trainable = instantiate_model(config, world_size, local_rank)
 
         if resuming:
-            getattr(model, "module", model).load_state_dict(torch.load(pt_paths["model.pt"]))
+            getattr(model, "module", model).load_state_dict(torch.load(pt_paths["model.pt"], map_location=model.device))
             resume_random_states(pt_paths, rank)
                 
 
@@ -234,8 +235,8 @@ def training_launcher(train_config: str):
         optimizer, scheduler, total_steps = fetch_optimizer_scheduler(config, model)
 
         if resuming:
-            optimizer.load_state_dict(torch.load(pt_paths["optimizer.pt"]))
-            scheduler.load_state_dict(torch.load(pt_paths["scheduler.pt"]))
+            optimizer.load_state_dict(torch.load(pt_paths["optimizer.pt"], map_location=model.device))
+            scheduler.load_state_dict(torch.load(pt_paths["scheduler.pt"], map_location=model.device))
 
         # loop over training steps
         train = config["train"]
@@ -276,7 +277,23 @@ def training_launcher(train_config: str):
     # val only needs a loader as we are going through all val exmaples each time we run val_step
     checkpoint_every = config["train"].get("checkpoint_every")
     print("="*40)
+    if resuming:
+        print(f"RESUMING TRAINING AT STEP {start_step}")
+        # let's trim the log to the resumption point if needed
+        with open(log_path, "r") as f:
+            lines = f.readlines()
+        filtered_lines = []
+        for l in lines:
+            if l.strip(): # non empty lines
+                line = json.loads(l)
+                if line["step"]<start_step:
+                    filtered_lines.append(line)
+        # let's overwrite the log with kept lines:
+        with open(log_path, "w") as f:
+            f.writelines(filtered_lines)
+
     print("STARTING TRAINING LOOP\n\n")
+
     if checkpoint_every is not None:
         checkpoints_dir = perm_run_dir / "checkpoints"
         os.makedirs(checkpoints_dir, exist_ok=True)
@@ -372,7 +389,7 @@ def batches_on_tap(loader: DataLoader, sampler: DistributedSampler, start_epoch:
     # loops over the data again and again, with a new shuffle each epoch
     for epoch in itertools.count(start_epoch):
         sampler.set_epoch(epoch)   # each time the yield returns the end, we iterate over this loop and start a new epoch.
-        yield from itertools.islice(loader, start = n_skip_batches) # loader gives batches of size micro_batch_size and collates them using our specified function
+        yield from itertools.islice(loader, n_skip_batches, None) # loader gives batches of size micro_batch_size and collates them using our specified function, starts at n_skip_batches and ends at.. None :)
 
 def get_sampler_loader(dataset: Dataset, seed: int, micro_batch_size: int, fn: Callable, rank: int, world_size:int) -> Tuple[DistributedSampler, DataLoader]:
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank,
