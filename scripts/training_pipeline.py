@@ -137,7 +137,7 @@ def training_launcher(train_config: str):
 
     perm_run_dir = run_dir / run_name
 
-    if rank == 0:
+    if rank == 0: # if another GPU checks it an error will be raised for the previous GPU created it
         if perm_run_dir.exists():
             raise FileExistsError(f"Run already exists: {perm_run_dir}")
 
