@@ -3,7 +3,8 @@ import torch
 import datetime
 from transformers import Mistral3ForConditionalGeneration
 from torch.nn.parallel import DistributedDataParallel
-
+import random
+import numpy
 from typing import Callable
 
 def open_group(default_device : str = "cpu"):
@@ -70,3 +71,18 @@ def wrap_model_ddp(model: Mistral3ForConditionalGeneration, local_rank: int)-> D
     if model.device != torch.device("cpu"):
         return DistributedDataParallel(model, device_ids = [local_rank])
     return DistributedDataParallel(model)
+
+
+def get_groupwide_random_states(world_size):
+    states = {
+        "python": random.getstate(),
+        "numpy": numpy.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all(),
+    }
+    if not torch.distributed.is_initialized():
+        return [states]
+    
+    output = [None for _ in range(world_size)]
+    torch.distributed.all_gather_object(output, states)
+    return output

@@ -6,6 +6,7 @@ import tempfile
 from typing import Callable
 import shutil
 import os
+import torch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 

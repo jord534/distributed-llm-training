@@ -40,7 +40,13 @@ from llm_train.distributed import (
     wrap_model_ddp,
     sum_accross_gpus,
     max_accross_gpus,
-    group_single_action
+    group_single_action,
+    get_groupwide_random_states,
+)
+
+from llm_train.checkpoint import (
+    write_run_metadata,
+    safe_write_dir
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -116,6 +122,16 @@ def write_trainable_params_number(this_run_dir, lm_trainable):
     with open(this_run_dir / "lm_trainable.json", "w") as file:
         json.dump(lm_trainable, file)
 
+def write_checkpoint(save_dir:Path, model: Mistral3ForConditionalGeneration, optimizer: torch.optim.AdamW, scheduler: torch.optim.lr_scheduler.LambdaLR, trainer: dict, random_states: list):
+    torch.save(getattr(model, "module", model).state_dict(), save_dir / "model.pt") # getattr is there to handle both DDP and single process cases
+    torch.save(optimizer.state_dict(), save_dir / "optimizer.pt")
+    torch.save(scheduler.state_dict(), save_dir / "scheduler.pt")
+    with open(save_dir / "trainer.json", "w") as file:
+        json.dump(trainer, file)
+    for rank in range(len(random_states)):
+        torch.save(random_states[rank], save_dir / f"rng_rank{rank}.pt")
+
+    return None
 
 def training_launcher(train_config: str):
     # This reads the config
@@ -181,6 +197,8 @@ def training_launcher(train_config: str):
         micro_batch_size = train["micro_batch_size"]
         accumulation_steps = train["accumulation_steps"]
 
+        # write run manifest
+        group_single_action(lambda: write_run_metadata(config, manifest, world_size, this_run_dir), rank)
         # copy all from temp dir to actual dir
         group_single_action(lambda: shutil.move(str(this_run_dir), str(perm_run_dir)), rank)
 
@@ -199,10 +217,13 @@ def training_launcher(train_config: str):
 
     val_loader = DataLoader(val_set, batch_size=micro_batch_size, shuffle=False, collate_fn=get_batch_from_examples, drop_last=False)
     # val only needs a loader as we are going through all val exmaples each time we run val_step
-
+    checkpoint_every = config["train"].get("checkpoint_every")
     print("="*40)
     print("STARTING TRAINING LOOP\n\n")
-    eta = None
+    if checkpoint_every is not None:
+        checkpoints_dir = perm_run_dir / "checkpoints"
+        os.makedirs(checkpoints_dir, exist_ok=True)
+
     steptimes = []
     for step in range(total_steps):
 
@@ -218,6 +239,28 @@ def training_launcher(train_config: str):
             autocast,
             world_size
         )
+
+        completed_steps = step + 1
+        if (checkpoint_every is not None) and (completed_steps % checkpoint_every == 0):
+            # safe checkpoint write
+            step_dir = checkpoints_dir / f"step_{completed_steps:06d}"
+            epoch = completed_steps*accumulation_steps // len(train_loader)
+            batches_seen = completed_steps*accumulation_steps % len(train_loader)
+            trainer = {
+                "step": completed_steps,
+                "epoch": epoch,
+                "batches_seen_in_epoch": batches_seen
+            }
+            random_states = get_groupwide_random_states(world_size)
+
+            group_single_action(
+                lambda : safe_write_dir(
+                    step_dir,
+                    lambda dir: write_checkpoint(dir, model, optimizer, scheduler, trainer, random_states)
+                ),
+                rank
+            )
+             
         # should we have DDP we aggregate the loss from all of them to log it
         log["loss"] = sum_accross_gpus(log["loss"], model.device)
         log["tokens"] = sum_accross_gpus(log["tokens"], model.device)
@@ -235,7 +278,8 @@ def training_launcher(train_config: str):
             val_loss = val_step(model, val_loader, autocast)
             val_log = {"step": step +1, "val_loss": val_loss}
             group_single_action(
-                lambda: log_val(val_log, log_path, val_loss, step)
+                lambda: log_val(val_log, log_path, val_loss, step),
+                rank
             )
             
             
