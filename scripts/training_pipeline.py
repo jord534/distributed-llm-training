@@ -280,17 +280,10 @@ def training_launcher(train_config: str):
     if resuming:
         print(f"RESUMING TRAINING AT STEP {start_step}")
         # let's trim the log to the resumption point if needed
-        with open(log_path, "r") as f:
-            lines = f.readlines()
-        filtered_lines = []
-        for l in lines:
-            if l.strip(): # non empty lines
-                line = json.loads(l)
-                if line["step"]<start_step:
-                    filtered_lines.append(line)
-        # let's overwrite the log with kept lines:
-        with open(log_path, "w") as f:
-            f.writelines(filtered_lines)
+        group_single_action(
+            lambda: trim_log(log_path, start_step),
+            rank
+        )
 
     print("STARTING TRAINING LOOP\n\n")
 
@@ -362,6 +355,19 @@ def training_launcher(train_config: str):
     print("Training concluded.")
     print("="*40)
 
+def trim_log(log_path, start_step):
+    with open(log_path, "r") as f:
+        lines = f.readlines()
+    filtered_lines = []
+    for line in lines:
+        if line.strip(): # non empty lines
+            if line["step"]<=start_step:
+                filtered_lines.append(line)
+    # let's overwrite the log with kept lines:
+    with open(log_path, "w") as f:
+        f.writelines(filtered_lines)
+
+    return None
 
 def write_log(log, log_path, total_steps, step, steptimes):
     if len(steptimes)<20:
@@ -390,7 +396,9 @@ def batches_on_tap(loader: DataLoader, sampler: DistributedSampler, start_epoch:
     for epoch in itertools.count(start_epoch):
         sampler.set_epoch(epoch)   # each time the yield returns the end, we iterate over this loop and start a new epoch.
         yield from itertools.islice(loader, n_skip_batches, None) # loader gives batches of size micro_batch_size and collates them using our specified function, starts at n_skip_batches and ends at.. None :)
+        n_skip_batches = 0  # only the first epoch is cut
 
+        
 def get_sampler_loader(dataset: Dataset, seed: int, micro_batch_size: int, fn: Callable, rank: int, world_size:int) -> Tuple[DistributedSampler, DataLoader]:
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank,
                                  shuffle=True, seed=seed, drop_last=True)
