@@ -38,4 +38,4 @@ train:
   autocast: false
   activation_checkpointing: false
   eval_every: 50
-  checkpoint_every: 5
+  checkpoint_every: 2

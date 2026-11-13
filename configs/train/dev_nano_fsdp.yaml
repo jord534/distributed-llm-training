@@ -41,3 +41,4 @@ train:
   fsdp: true
   fsdp_param_dtype: float32     # bfloat16 in the GPU configs
   fsdp_reduce_dtype: float32
+  checkpoint_every: 2
