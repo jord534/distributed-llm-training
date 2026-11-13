@@ -182,9 +182,14 @@ def training_launcher(train_config: str):
         config = yaml.safe_load(file)
     # check artifacts/run exists, if not create a temp dir and copy all in the actual dir at the end (to catch exceptions)
     run_name = config["run_name"]
-    # Get rank and world_size from the torch run group:
+    
+    # Handle fsdp specifics
     fsdp = config["train"].get("fsdp", False)
+    param_dtype = TORCH_DTYPES[config["train"].get("fsdp_param_dtype", "bfloat16")]
+    reduce_dtype = TORCH_DTYPES[config["train"].get("fsdp_reduce_dtype", "float32")]
     device = torch.device(config["device"])
+
+    # Get rank and world_size from the torch run group:
     group = open_group(device)
     rank = group["rank"]
     local_rank = group["local_rank"]
@@ -224,7 +229,7 @@ def training_launcher(train_config: str):
         # instantiate model
         print("Instantiate model... \n")
             
-        model, lm_trainable = instantiate_model(config, group, fsdp)
+        model, lm_trainable = instantiate_model(config, group, fsdp, param_dtype, reduce_dtype)
         # breakpoint()
 
         if resuming:

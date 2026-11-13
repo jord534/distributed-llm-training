@@ -98,6 +98,12 @@ def fsdp_split(
     # the idea is to assign shards to each device
     # treating decoder blocks first then the whole model
 
+    # let's build a mesh of devices
+    mesh = torch.distributed.device_mesh.init_device_mesh(
+        device_type=setup["device"].type,
+        mesh_shape = (setup["world_size"],)
+    )
+
     # let's define the muxed precision policy we want our modules to use
     mp = torch.distributed.fsdp.MixedPrecisionPolicy(param_dtype=param_dtype, reduce_dtype=reduce_dtype)
     # fetch all decoder blocks:
@@ -107,15 +113,15 @@ def fsdp_split(
         # + input_layernorm (Ministral3RMSNorm) + post_attention_layernorm (Ministral3RMSNorm)]
         #  in the dev toy model there are 2 hidden layers
         # the structure can be observed with print(model) in pdb
-        torch.distributed.fsdp.fully_shard(layer, mp_policy = mp)
+        torch.distributed.fsdp.fully_shard(layer, mp_policy = mp, mesh = mesh)
 
     # let's shard the vision tower and multimodal part as well, so that their slicing is indepent from the root model
     # and since the root model is called and not the vison and multimodel bits, their slices won't take up memory on the gpus
-    torch.distributed.fsdp.fully_shard(model.model.vision_tower, mp_policy = mp)
-    torch.distributed.fsdp.fully_shard(model.model.multi_modal_projector, mp_policy = mp)
+    torch.distributed.fsdp.fully_shard(model.model.vision_tower, mp_policy = mp, mesh = mesh)
+    torch.distributed.fsdp.fully_shard(model.model.multi_modal_projector, mp_policy = mp, mesh = mesh)
 
     # now the root model :
-    torch.distributed.fsdp.fully_shard(model, mp_policy = mp)
+    torch.distributed.fsdp.fully_shard(model, mp_policy = mp, mesh = mesh)
     # we do layers first then whole model to enable the sharding at the layer level
     # otherwise it assimes as layer isn't to be sharded
 

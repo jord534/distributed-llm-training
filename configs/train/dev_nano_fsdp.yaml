@@ -1,4 +1,4 @@
-run_name: dev_nano_ddp_s1337
+run_name: dev_nano_fsdp_s1337
 seed: 1337
 device: cpu
 
@@ -39,3 +39,5 @@ train:
   activation_checkpointing: false
   eval_every: 50
   fsdp: true
+  fsdp_param_dtype: float32     # bfloat16 in the GPU configs
+  fsdp_reduce_dtype: float32
