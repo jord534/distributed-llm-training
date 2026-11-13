@@ -126,3 +126,8 @@ def fsdp_split(
     # otherwise it assimes as layer isn't to be sharded
 
     return None
+
+def wait_for_all():
+    if torch.distributed.is_initialized():
+        torch.distributed.barrier()
+        

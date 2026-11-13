@@ -46,7 +46,8 @@ from llm_train.distributed import (
     max_accross_gpus,
     group_single_action,
     get_groupwide_random_states,
-    fsdp_split
+    fsdp_split,
+    wait_for_all
 )
 
 from llm_train.checkpoint import (
@@ -409,19 +410,20 @@ def training_launcher(train_config: str):
                     lambda: write_checkpoint(tmp_dir, model, optimizer, scheduler, trainer, random_states, fsdp),
                     rank
                 )
-                torch.distributed.barrier() # wait up
+                wait_for_all() # wait up
                 group_single_action(
                     lambda: os.replace(tmp_dir, step_dir),
                     rank
                 )# this one perform the transition from .step_00XX.tmp to step_00XX, and prevents multiple GPUs trying to do that
                 
-            group_single_action(
-                lambda : safe_write_dir(
-                    step_dir,
-                    lambda dir: write_checkpoint(dir, model, optimizer, scheduler, trainer, random_states, fsdp)
-                ),
-                rank
-            ) # this one handles trainer, scheduler and rank writes in any case (ddp, fsdp, no parallel)
+            else:
+                group_single_action(
+                    lambda : safe_write_dir(
+                        step_dir,
+                        lambda dir: write_checkpoint(dir, model, optimizer, scheduler, trainer, random_states, fsdp)
+                    ),
+                    rank
+                ) # this one handles trainer, scheduler and rank writes in any case (ddp, fsdp, no parallel)
                 
             
              

@@ -7,6 +7,7 @@ from typing import Callable
 import shutil
 import os
 import torch
+from llm_train.distributed import wait_for_all
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -77,12 +78,12 @@ def safe_write_dir_fsdp(target_dir: str, rank: int, write_fn: Callable):
             shutil.rmtree(tmp_dir)
         # let's create it now
         os.mkdir(tmp_dir)
-    torch.distributed.barrier() # all GPUs wait up so that the tmp_dir exists and is empty
+    wait_for_all() # all GPUs wait up so that the tmp_dir exists and is empty
     try:
         write_fn(tmp_dir)
     except:
         shutil.rmtree(tmp_dir)
         raise
-    torch.distributed.barrier() # all GPUs wait up so that all dicts are saved
+    wait_for_all() # all GPUs wait up so that all dicts are saved
 
     return tmp_dir
