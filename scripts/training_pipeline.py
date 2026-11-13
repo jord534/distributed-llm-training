@@ -16,6 +16,8 @@ import itertools
 from torch.utils.data import DataLoader, DistributedSampler
 import random
 import numpy
+import torch.distributed.checkpoint as dcp # .checkpoint isn't imported automatically
+from torch.distributed.checkpoint.state_dict import get_state_dict, set_model_state_dict, set_optimizer_state_dict
 
 from typing import Callable, Tuple
 
@@ -137,10 +139,32 @@ def write_trainable_params_number(this_run_dir, lm_trainable):
     with open(this_run_dir / "lm_trainable.json", "w") as file:
         json.dump(lm_trainable, file)
 
-def write_checkpoint(save_dir:Path, model: Mistral3ForConditionalGeneration, optimizer: torch.optim.AdamW, scheduler: torch.optim.lr_scheduler.LambdaLR, trainer: dict, random_states: list):
-    torch.save(getattr(model, "module", model).state_dict(), save_dir / "model.pt") # getattr is there to handle both DDP and single process cases
-    torch.save(optimizer.state_dict(), save_dir / "optimizer.pt")
+def write_checkpoint(save_dir:Path,
+                     model: Mistral3ForConditionalGeneration,
+                     optimizer: torch.optim.AdamW,
+                     scheduler: torch.optim.lr_scheduler.LambdaLR,
+                     trainer: dict,
+                     random_states: list,
+                     fsdp: bool = None,
+                     
+    ):
+    if fsdp:
+        model_state_dict = get_state_dict(model.module)
+        torch.distributed.checkpoint.save(
+            model_state_dict,
+            save_dir / "model.pt",
+        )
+        optimizer_state_dict = get_state_dict(optimizers=[optimizer])
+        torch.distributed.checkpoint.save(
+                    optimizer_state_dict,
+                    save_dir / "optimizer.pt",
+        )
+
+    else:
+        torch.save(getattr(model, "module", model).state_dict(), save_dir / "model.pt") # getattr is there to handle both DDP and single process cases
+        torch.save(optimizer.state_dict(), save_dir / "optimizer.pt")
     torch.save(scheduler.state_dict(), save_dir / "scheduler.pt")
+
     with open(save_dir / "trainer.json", "w") as file:
         json.dump(trainer, file)
     for rank in range(len(random_states)):
@@ -233,7 +257,10 @@ def training_launcher(train_config: str):
         # breakpoint()
 
         if resuming:
-            getattr(model, "module", model).load_state_dict(torch.load(pt_paths["model.pt"], map_location=model.device))
+            if fsdp:
+                set_model_state_dict(model.module, dcp.load(pt_paths["model.pt"], map_location = model.device))
+            else:
+                getattr(model, "module", model).load_state_dict(torch.load(pt_paths["model.pt"], map_location=model.device))
             resume_random_states(pt_paths, rank)
                 
 
@@ -256,7 +283,10 @@ def training_launcher(train_config: str):
         optimizer, scheduler, total_steps = fetch_optimizer_scheduler(config, model)
 
         if resuming:
-            optimizer.load_state_dict(torch.load(pt_paths["optimizer.pt"], map_location=model.device))
+            if fsdp:
+                set_optimizer_state_dict(optimizer, dcp.load(pt_paths["optimizer.pt"], map_location = model.device))
+            else:
+                optimizer.load_state_dict(torch.load(pt_paths["optimizer.pt"], map_location=model.device))
             scheduler.load_state_dict(torch.load(pt_paths["scheduler.pt"], map_location=model.device))
 
         # loop over training steps
