@@ -87,13 +87,30 @@ def get_groupwide_random_states(world_size):
     torch.distributed.all_gather_object(output, states)
     return output
 
-def fsdp_split(model : Mistral3ForConditionalGeneration, setup: dict, precision: torch.dtype):
+def fsdp_split(
+        model : Mistral3ForConditionalGeneration,
+        setup: dict,
+        param_dtype: torch.dtype = torch.bfloat16, # used for forward
+        reduce_dtype: torch.dtype = torch.float32 # used for weights master copy and gradient updates
+    ):
+
     # setup is a dict output by open_group {"rank", "local_rank", "world_size", "device"}
     # the idea is to assign shards to each device
     # treating decoder blocks first then the whole model
 
-    
+    # let's define the muxed precision policy we want our modules to use
+    mp = torch.distributed.fsdp.MixedPrecisionPolicy(param_dtype=param_dtype, reduce_dtype=reduce_dtype)
+    # fetch all decoder blocks:
+    for layer in model.model.language_model.layers:
+        # each layer is a Ministral3DecoderLayer with :
+        # [self_attn (Ministral3Attention)  + mlp (Ministral3MLP) 
+        # + input_layernorm (Ministral3RMSNorm) + post_attention_layernorm (Ministral3RMSNorm)]
+        #  in the dev toy model there are 2 hidden layers
+        # the structure can be observed with print(model) in pdb
+        torch.distributed.fsdp.fully_shard(layer, mp = mp)
 
+    torch.distributed.fsdp.fully_shard(model)
+    # we do layers first then whole model to enable the sharding at the layer level
+    # otherwise it assimes as layer isn't to be sharded
 
-    
     return None

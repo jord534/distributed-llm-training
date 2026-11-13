@@ -44,6 +44,7 @@ from llm_train.distributed import (
     max_accross_gpus,
     group_single_action,
     get_groupwide_random_states,
+    fsdp_split
 )
 
 from llm_train.checkpoint import (
@@ -81,10 +82,18 @@ def copy_audit_and_config(this_run_dir, train_cfg):
     shutil.copyfile(audit_file, this_run_dir /  "environment.txt")
     return None
 
-def instantiate_model(config, world_size:int, local_rank:int) -> Mistral3ForConditionalGeneration:
+def instantiate_model(config: dict,
+                      setup:dict,
+                      fsdp: bool = False,
+                      param_dtype: torch.dtype = None,
+                      reduce_dtype: torch.dtype = None
+    ) -> Mistral3ForConditionalGeneration:
+
     # instantiate model
     device = torch.device(config["device"])
     model_cfg = config["model"]
+    world_size = setup["world_size"]
+    local_rank = setup["local_rank"]
 
     model_id = model_cfg["model_id"]
     revision = model_cfg["revision"]
@@ -105,8 +114,12 @@ def instantiate_model(config, world_size:int, local_rank:int) -> Mistral3ForCond
     if activation_checkpointing:
         model.gradient_checkpointing_enable() # this needs to happen before wrapping
 
-    if world_size > 1:
-        model = wrap_model_ddp(model, local_rank)
+    
+    if world_size > 1: # ie we are using parallelism accross devices
+        if fsdp:
+            model = fsdp_split(model, setup, param_dtype, reduce_dtype)
+        else: # DDP case
+            model = wrap_model_ddp(model, local_rank)
 
     return model, lm_trainable
 
@@ -170,6 +183,7 @@ def training_launcher(train_config: str):
     # check artifacts/run exists, if not create a temp dir and copy all in the actual dir at the end (to catch exceptions)
     run_name = config["run_name"]
     # Get rank and world_size from the torch run group:
+    fsdp = getattr(config, "fsdp", None)
     device = torch.device(config["device"])
     group = open_group(device)
     rank = group["rank"]
@@ -210,7 +224,7 @@ def training_launcher(train_config: str):
         # instantiate model
         print("Instantiate model... \n")
             
-        model, lm_trainable = instantiate_model(config, world_size, local_rank)
+        model, lm_trainable = instantiate_model(config, group, fsdp)
         breakpoint()
 
         if resuming:
