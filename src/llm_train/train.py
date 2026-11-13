@@ -178,11 +178,12 @@ def get_context(model: Mistral3ForConditionalGeneration | DistributedDataParalle
     ):
     if world_size == 1 or i == n_micro_batches - 1:  # either no parallel or final micro batch (where gradients need syncing between GPUs)
         if fsdp:
-            return model.set_requires_gradient_sync(True)
+            model.set_requires_gradient_sync(True)
         return nullcontext()
     if i < n_micro_batches - 1: # either DDP or FSDP with gradient syncing left for the final micro batch only to prevent repeated syncing
         if fsdp:
-            return model.set_requires_gradient_sync(False)
+            model.set_requires_gradient_sync(False)
+            return nullcontext()
         return model.no_sync() # ddp case
             
 
