@@ -94,7 +94,7 @@ def get_optimizer_and_lr_scheduler(params, lr, weight_decay, warmup_step, total_
         lr = lr,
         weight_decay=weight_decay,
     )
-    multiplier = lambda step: (step<= warmup_step)*(step/warmup_step) + (step>warmup_step)* 0.5 * (1+np.cos(np.pi*(step- warmup_step)/(total_steps - warmup_step)))
+    multiplier = lambda step: (step<= warmup_step)*(step/warmup_step) + (step>warmup_step)* 0.5 * (1+math.cos(math.pi*(step- warmup_step)/(total_steps - warmup_step)))
     lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=multiplier)
 
     return optimizer, lr_scheduler

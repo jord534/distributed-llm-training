@@ -135,7 +135,7 @@ def write_checkpoint(save_dir:Path, model: Mistral3ForConditionalGeneration, opt
 
     return None
 
-def checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, world_size, rank):
+def checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, rank):
     # This assesses that latest_ckpt_folder holds all necessary files
     # raises if not
     files = {"model.pt": None, "optimizer.pt": None, "scheduler.pt": None, "trainer.json": None}
@@ -192,8 +192,9 @@ def training_launcher(train_config: str):
         resuming = True
         latest_ckpt_folder , ckpt_step_nb = sorted(step_dirs, key = lambda fld: fld[1])[-1] # returns (folder_name, step_number) and we need only the folder name
         # check we have all necessary .pt and json files
-        pt_paths = checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, world_size, rank)
+        pt_paths = checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, rank)
 
+    # let's use the context manager to safely create a temp dir and execute all necessary preparations
     with tempfile.TemporaryDirectory() as tmp_dir :
         if not resuming:
             tmp_dir = Path(tmp_dir)
