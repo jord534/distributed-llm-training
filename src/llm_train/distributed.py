@@ -107,7 +107,7 @@ def fsdp_split(
         # + input_layernorm (Ministral3RMSNorm) + post_attention_layernorm (Ministral3RMSNorm)]
         #  in the dev toy model there are 2 hidden layers
         # the structure can be observed with print(model) in pdb
-        torch.distributed.fsdp.fully_shard(layer, mp = mp)
+        torch.distributed.fsdp.fully_shard(layer, mp_policy = mp)
 
     torch.distributed.fsdp.fully_shard(model)
     # we do layers first then whole model to enable the sharding at the layer level

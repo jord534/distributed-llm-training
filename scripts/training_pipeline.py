@@ -85,8 +85,8 @@ def copy_audit_and_config(this_run_dir, train_cfg):
 def instantiate_model(config: dict,
                       setup:dict,
                       fsdp: bool = False,
-                      param_dtype: torch.dtype = None,
-                      reduce_dtype: torch.dtype = None
+                      param_dtype: torch.dtype = torch.bfloat16,
+                      reduce_dtype: torch.dtype = torch.float32,
     ) -> Mistral3ForConditionalGeneration:
 
     # instantiate model
@@ -117,7 +117,7 @@ def instantiate_model(config: dict,
     
     if world_size > 1: # ie we are using parallelism accross devices
         if fsdp:
-            model = fsdp_split(model, setup, param_dtype, reduce_dtype)
+            fsdp_split(model, setup, param_dtype, reduce_dtype) # in place change
         else: # DDP case
             model = wrap_model_ddp(model, local_rank)
 
@@ -183,7 +183,7 @@ def training_launcher(train_config: str):
     # check artifacts/run exists, if not create a temp dir and copy all in the actual dir at the end (to catch exceptions)
     run_name = config["run_name"]
     # Get rank and world_size from the torch run group:
-    fsdp = getattr(config, "fsdp", None)
+    fsdp = config["train"].get("fsdp", False)
     device = torch.device(config["device"])
     group = open_group(device)
     rank = group["rank"]
@@ -225,7 +225,7 @@ def training_launcher(train_config: str):
         print("Instantiate model... \n")
             
         model, lm_trainable = instantiate_model(config, group, fsdp)
-        breakpoint()
+        # breakpoint()
 
         if resuming:
             getattr(model, "module", model).load_state_dict(torch.load(pt_paths["model.pt"], map_location=model.device))
@@ -320,7 +320,8 @@ def training_launcher(train_config: str):
             scheduler,
             max_grad_norm,
             autocast,
-            world_size
+            world_size,
+            fsdp,
         )
 
         completed_steps = step + 1

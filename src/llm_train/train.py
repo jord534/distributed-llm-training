@@ -108,15 +108,15 @@ def training_step(
         max_grad_norm: float, 
         use_autocast: bool, # to enable mixed precision for a quick forward pass and accurate loss and grad
         world_size: int,
+        fsdp: bool,
     ):
     
     model.train()
 
     if model.device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(model.device) 
+        torch.cuda.synchronize() # wait for previous GPU work to finish
 
-    if model.device.type == "cuda":
-        torch.cuda.synchronize()          # wait for previous GPU work to finish
     start = time.perf_counter()
 
     optimizer.zero_grad()
@@ -128,7 +128,7 @@ def training_step(
         learned_tokens = sum_accross_gpus(learned_tokens, model.device) # for DDP we will compute the average loss over all tokens involved accross GPUs
 
     for i, batch in enumerate(micro_batches):
-        model_sync_condition = model.no_sync() if (i < len(micro_batches) - 1 and world_size > 1) else nullcontext() # only sync the gradient once since it accumulates
+        model_sync_condition = get_context(model, i, len(micro_batches), world_size, fsdp) # handle gradient syncing behaviour
         with model_sync_condition:
             labels = batch["labels"].to(model.device)
             input_ids = batch["input_ids"].to(model.device)
@@ -168,6 +168,22 @@ def training_step(
         "step_time_s": step_time, # diagnostics
         "peak_memory_gb": peak_mem, # diagnostics
     }
+
+
+def get_context(model: Mistral3ForConditionalGeneration | DistributedDataParallel,
+                i: int,
+                n_micro_batches: int,
+                world_size: int,
+                fsdp: bool
+    ):
+    if world_size == 1 or i == n_micro_batches - 1:  # either no parallel or final micro batch (where gradients need syncing between GPUs)
+        return nullcontext()
+    if i < n_micro_batches - 1: # either DDP or FSDP with gradient syncing left for the final micro batch only to prevent repeated syncing
+        if fsdp:
+            return model.set_requires_gradient_sync(False)
+        return model.no_sync() # ddp case
+
+            
 
 def val_step(
         model: Mistral3ForConditionalGeneration | DistributedDataParallel,
