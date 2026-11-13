@@ -91,7 +91,7 @@ def fsdp_split(
         model : Mistral3ForConditionalGeneration,
         setup: dict,
         param_dtype: torch.dtype = torch.bfloat16, # used for forward
-        reduce_dtype: torch.dtype = torch.float32 # used for weights master copy and gradient updates
+        reduce_dtype: torch.dtype = torch.float32 # used for gradient updates
     ):
 
     # setup is a dict output by open_group {"rank", "local_rank", "world_size", "device"}
@@ -109,7 +109,13 @@ def fsdp_split(
         # the structure can be observed with print(model) in pdb
         torch.distributed.fsdp.fully_shard(layer, mp_policy = mp)
 
-    torch.distributed.fsdp.fully_shard(model)
+    # let's shard the vision tower and multimodal part as well, so that their slicing is indepent from the root model
+    # and since the root model is called and not the vison and multimodel bits, their slices won't take up memory on the gpus
+    torch.distributed.fsdp.fully_shard(model.model.vision_tower, mp_policy = mp)
+    torch.distributed.fsdp.fully_shard(model.model.multi_modal_projector, mp_policy = mp)
+
+    # now the root model :
+    torch.distributed.fsdp.fully_shard(model, mp_policy = mp)
     # we do layers first then whole model to enable the sharding at the layer level
     # otherwise it assimes as layer isn't to be sharded
 
