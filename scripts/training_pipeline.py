@@ -195,7 +195,7 @@ def checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, rank
                     raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {dir}")
                 metadata = dir / ".metadata"
                 if not metadata.exists():
-                    raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {metadat}")
+                    raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {metadata}")
                 files[file] = dir
         return files
         
@@ -402,9 +402,19 @@ def training_launcher(train_config: str):
             random_states = get_groupwide_random_states(world_size)
 
             if fsdp:
-                # in that case each device needs to write
+                # in that case each device needs to save
                 # write fsdp-specific shards
-                safe_write_dir_fsdp(step_dir, lambda: write_fsdp_ckpt(step_dir, model, optimizer))
+                tmp_dir = safe_write_dir_fsdp(step_dir, rank, lambda dir : write_fsdp_ckpt(dir, model, optimizer))
+                group_single_action(
+                    lambda: write_checkpoint(tmp_dir, model, optimizer, scheduler, trainer, random_states, fsdp),
+                    rank
+                )
+                torch.distributed.barrier() # wait up
+                group_single_action(
+                    lambda: os.replace(tmp_dir, step_dir),
+                    rank
+                )# this one perform the transition from .step_00XX.tmp to step_00XX, and prevents multiple GPUs trying to do that
+                
             group_single_action(
                 lambda : safe_write_dir(
                     step_dir,
