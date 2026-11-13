@@ -211,6 +211,7 @@ def training_launcher(train_config: str):
         print("Instantiate model... \n")
             
         model, lm_trainable = instantiate_model(config, world_size, local_rank)
+        breakpoint()
 
         if resuming:
             getattr(model, "module", model).load_state_dict(torch.load(pt_paths["model.pt"], map_location=model.device))

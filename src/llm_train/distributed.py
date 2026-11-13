@@ -86,3 +86,14 @@ def get_groupwide_random_states(world_size):
     output = [None for _ in range(world_size)]
     torch.distributed.all_gather_object(output, states)
     return output
+
+def fsdp_split(model : Mistral3ForConditionalGeneration, setup: dict, precision: torch.dtype):
+    # setup is a dict output by open_group {"rank", "local_rank", "world_size", "device"}
+    # the idea is to assign shards to each device
+    # treating decoder blocks first then the whole model
+
+    
+
+
+    
+    return None
