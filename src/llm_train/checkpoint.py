@@ -58,3 +58,23 @@ def safe_write_dir(target_dir: str, write_fn: Callable):
     os.replace(tmp_dir, target_dir)
 
     return None
+
+def safe_write_dir_fsdp(target_dir: str, write_fn: Callable):
+    # this one create a temp dir that all processes can share
+    target_dir = Path(target_dir)
+    if target_dir.exists():
+        raise FileExistsError(f"This directory {target_dir} exists already.")
+
+    target_dir_parent = target_dir.parent
+
+    # tmp_dit stem is like ".step_0050.tmp"
+    tmp_dir = os.makedirs(target_dir_parent / f".{target_dir.stem}.tmp", exist_ok=True) # we are making a temp dir that all gpus can access
+    tmp_dir = Path(tmp_dir)
+    try:
+        write_fn(tmp_dir)
+    except:
+        shutil.rmtree(tmp_dir)
+        raise
+    os.replace(tmp_dir, target_dir)
+
+    return None

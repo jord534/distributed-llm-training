@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 import random
 import numpy
 import torch.distributed.checkpoint as dcp # .checkpoint isn't imported automatically
-from torch.distributed.checkpoint.state_dict import get_state_dict, set_model_state_dict, set_optimizer_state_dict
+from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict
 
 from typing import Callable, Tuple
 
@@ -51,7 +51,8 @@ from llm_train.distributed import (
 
 from llm_train.checkpoint import (
     write_run_metadata,
-    safe_write_dir
+    safe_write_dir,
+    safe_write_dir_fsdp
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -148,23 +149,11 @@ def write_checkpoint(save_dir:Path,
                      fsdp: bool = None,
                      
     ):
-    if fsdp:
-        model_state_dict = get_state_dict(model.module)
-        torch.distributed.checkpoint.save(
-            model_state_dict,
-            save_dir / "model.pt",
-        )
-        optimizer_state_dict = get_state_dict(optimizers=[optimizer])
-        torch.distributed.checkpoint.save(
-                    optimizer_state_dict,
-                    save_dir / "optimizer.pt",
-        )
-
-    else:
+    if not fsdp:
         torch.save(getattr(model, "module", model).state_dict(), save_dir / "model.pt") # getattr is there to handle both DDP and single process cases
         torch.save(optimizer.state_dict(), save_dir / "optimizer.pt")
-    torch.save(scheduler.state_dict(), save_dir / "scheduler.pt")
 
+    torch.save(scheduler.state_dict(), save_dir / "scheduler.pt")
     with open(save_dir / "trainer.json", "w") as file:
         json.dump(trainer, file)
     for rank in range(len(random_states)):
@@ -172,9 +161,44 @@ def write_checkpoint(save_dir:Path,
 
     return None
 
-def checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, rank):
+def write_fsdp_ckpt(dir, model, optimizer):
+
+    model_state_dict, optimizer_state_dict = get_state_dict(
+        model,
+        optimizer,
+    )
+
+    dcp.save(
+        {
+            "model": model_state_dict,
+            "optimizer": optimizer_state_dict
+        }, 
+        checkpoint_id=dir / "state"
+    )
+    return None
+
+def checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, rank, fsdp):
     # This assesses that latest_ckpt_folder holds all necessary files
     # raises if not
+    if fsdp:
+        files = {"state_dicts": None, "scheduler.pt": None, "trainer.json": None}
+        files[f"rng_rank{rank}.pt"] = None
+        for file in files.keys():
+            if ".pt" in file or ".json" in file:
+                file_path = ckpt_dir / latest_ckpt_folder / file
+                if not file_path.exists():
+                    raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {file}")
+                files[file] = file_path
+            else:
+                dir = file_path = ckpt_dir / latest_ckpt_folder / "state"
+                if not dir.exists():
+                    raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {dir}")
+                metadata = dir / ".metadata"
+                if not metadata.exists():
+                    raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {metadat}")
+                files[file] = dir
+        return files
+        
     files = {"model.pt": None, "optimizer.pt": None, "scheduler.pt": None, "trainer.json": None}
     files[f"rng_rank{rank}.pt"] = None
 
@@ -235,7 +259,7 @@ def training_launcher(train_config: str):
         resuming = True
         latest_ckpt_folder , ckpt_step_nb = sorted(step_dirs, key = lambda fld: fld[1])[-1] # returns (folder_name, step_number) and we need only the folder name
         # check we have all necessary .pt and json files
-        pt_paths = checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, rank)
+        pt_paths = checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, rank, fsdp)
 
     # let's use the context manager to safely create a temp dir and execute all necessary preparations
     with tempfile.TemporaryDirectory() as tmp_dir :
@@ -258,7 +282,8 @@ def training_launcher(train_config: str):
 
         if resuming:
             if fsdp:
-                set_model_state_dict(model.module, dcp.load(pt_paths["model.pt"], map_location = model.device))
+                pass
+                # that case needs the optimizer instantiated too, see further below
             else:
                 getattr(model, "module", model).load_state_dict(torch.load(pt_paths["model.pt"], map_location=model.device))
             resume_random_states(pt_paths, rank)
@@ -284,7 +309,11 @@ def training_launcher(train_config: str):
 
         if resuming:
             if fsdp:
-                set_optimizer_state_dict(optimizer, dcp.load(pt_paths["optimizer.pt"], map_location = model.device))
+                # now we can handle both the model and the optimizer loading their state dict
+                model_sd, optim_sd = get_state_dict(model, optimizer)
+                state = {"model": model_sd, "optimizer": optim_sd}
+                dcp.load(state, checkpoint_id=pt_paths["state_dicts"])
+                set_state_dict(model, optimizer, model_state_dict=state["model"], optim_state_dict=state["optimizer"])
             else:
                 optimizer.load_state_dict(torch.load(pt_paths["optimizer.pt"], map_location=model.device))
             scheduler.load_state_dict(torch.load(pt_paths["scheduler.pt"], map_location=model.device))
@@ -372,13 +401,19 @@ def training_launcher(train_config: str):
             }
             random_states = get_groupwide_random_states(world_size)
 
+            if fsdp:
+                # in that case each device needs to write
+                # write fsdp-specific shards
+                safe_write_dir_fsdp(step_dir, lambda: write_fsdp_ckpt(step_dir, model, optimizer))
             group_single_action(
                 lambda : safe_write_dir(
                     step_dir,
-                    lambda dir: write_checkpoint(dir, model, optimizer, scheduler, trainer, random_states)
+                    lambda dir: write_checkpoint(dir, model, optimizer, scheduler, trainer, random_states, fsdp)
                 ),
                 rank
-            )
+            ) # this one handles trainer, scheduler and rank writes in any case (ddp, fsdp, no parallel)
+                
+            
              
         # should we have DDP we aggregate the loss from all of them to log it
         log["loss"] = sum_accross_gpus(log["loss"], model.device)
