@@ -69,8 +69,8 @@ def group_single_action(action: Callable, rank: int):
 
 def wrap_model_ddp(model: Mistral3ForConditionalGeneration, local_rank: int)-> DistributedDataParallel:
     if model.device != torch.device("cpu"):
-        return DistributedDataParallel(model, device_ids = [local_rank])
-    return DistributedDataParallel(model)
+        return DistributedDataParallel(model, device_ids = [local_rank], gradient_as_bucket_view=True)
+    return DistributedDataParallel(model, gradient_as_bucket_view=True)
 
 
 def get_groupwide_random_states(world_size):
