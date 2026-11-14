@@ -1,0 +1,29 @@
+run_name: 3b_fsdp_2gpu_s1337
+seed: 1337
+device: cuda
+
+model:
+  kind: pretrained
+  model_id: mistralai/Ministral-3-3B-Base-2512
+  revision: 6f9c4b12a95b139af68670a6713616b757923735
+  dtype: float32
+
+data:
+  cache: artifacts/data/ultrachat_200k_train_sft_29d7efb2
+  max_train_examples: null
+
+train:
+  micro_batch_size: 1
+  accumulation_steps: 4
+  learning_rate: 1.0e-5
+  weight_decay: 0.1
+  warmup_steps: 5
+  total_steps: 50
+  max_grad_norm: 1.0
+  autocast: false
+  activation_checkpointing: false
+  eval_every: 25
+  checkpoint_every: null
+  fsdp: true
+  fsdp_param_dtype: bfloat16
+  fsdp_reduce_dtype: float32
