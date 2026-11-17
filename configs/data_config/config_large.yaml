@@ -1,0 +1,25 @@
+dataset:
+  id: HuggingFaceH4/ultrachat_200k
+  revision: 8049631c405ae6576f93f445c6b8166f76f5505a
+  split: train_sft                # test_sft is kept for the end, never used here
+
+tokenizer:
+  # must match the model used for training: same id, same revision
+  model_id: mistralai/Ministral-3-3B-Base-2512
+  revision: 6f9c4b12a95b139af68670a6713616b757923735
+  mode: finetuning                # conversations end with an assistant answer
+
+selection:
+  sample_size: 50000               # dev sample of 50k
+  seed: 1337
+  val_fraction: 0.02              # 1000 conversations for validation
+
+processing:
+  max_seq_length: 2048            # longer convos are kept vs config.yaml
+  truncation_side: right          # keep the beginning of the conversation
+  invalid_conversations: skip     # skip and record the reason in the manifest, instead of crashing
+
+cache:
+  root: artifacts/data            # the tokenized cache (step 2.4)
+  hf_cache: artifacts/hf_cache    # raw downloads from Hugging Face
+  overwrite: false
