@@ -89,10 +89,12 @@ def get_loss(logits, labels, n_learned):
 
 def get_optimizer_and_lr_scheduler(params, lr, weight_decay, warmup_step, total_steps):
     active_parms = [p for p in params if p.requires_grad]
+    is_cuda = active_parms[0].is_cuda
     optimizer =  torch.optim.AdamW(
         params=active_parms,
         lr = lr,
         weight_decay=weight_decay,
+        fused=is_cuda, # this saves memory on DDP runs but prevents differentiate through the optimize step, we do not need that
     )
     multiplier = lambda step: (step<= warmup_step)*(step/warmup_step) + (step>warmup_step)* 0.5 * (1+math.cos(math.pi*(step- warmup_step)/(total_steps - warmup_step)))
     lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=multiplier)
