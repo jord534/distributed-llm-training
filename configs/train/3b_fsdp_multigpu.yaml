@@ -9,7 +9,7 @@ model:
   dtype: float32
 
 data:
-  cache: artifacts/data/ultrachat_200k_train_sft_29d7efb2
+  cache: artifacts/data/ultrachat_200k_train_sft_c6230c6b
   max_train_examples: null
 
 train:
