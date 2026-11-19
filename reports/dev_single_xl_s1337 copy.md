@@ -9,6 +9,7 @@ At the end of the xl run, there appears to be a slight diversion between val and
 
 The dev model itself is tiny 
 parameter counts for small vs xl dev model : 34.7 M (same)
+transformer layers parameter count: 0.92M, so most of the parameters are embedding (97% are word embedding parameters, the hidden architecture is very small in comparasion)
 
 
 tokens run through in training small vs xl dev model : 1.4 M vs 21.1 M

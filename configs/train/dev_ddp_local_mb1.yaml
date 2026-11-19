@@ -1,0 +1,42 @@
+run_name: dev_ddp_local_mb1_s1337
+seed: 1337
+device: cpu
+
+model:
+  kind: dev
+  model_id: mistralai/Ministral-3-3B-Base-2512
+  revision: 6f9c4b12a95b139af68670a6713616b757923735
+  dtype: float32
+
+dev_dims:
+  text_dims:
+    num_hidden_layers: 2
+    hidden_size: 256
+    intermediate_size: 512
+    num_attention_heads: 4
+    num_key_value_heads: 2
+    head_dim: 64
+  vision_dims:
+    num_hidden_layers: 1
+    hidden_size: 64
+    intermediate_size: 128
+    num_attention_heads: 2
+    head_dim: 32
+
+data:
+  cache: artifacts/data/ultrachat_200k_train_sft_c6230c6b
+  max_train_examples: null
+
+train:
+  micro_batch_size: 1           # fits DDP too (micro-batch 2 peaked at 78.5 GB)
+  accumulation_steps: 2        # × 1 × 2 GPUs = 4 conversations per step
+  learning_rate: 2.0e-5
+  weight_decay: 0.1
+  warmup_steps: 6               # 10% of the run
+  total_steps: 60               # ~13 min per run
+  max_grad_norm: 1.0
+  autocast: true
+  activation_checkpointing: false
+  eval_every: 30
+  checkpoint_every: null
+  fsdp: false

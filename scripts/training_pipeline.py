@@ -14,6 +14,12 @@ import struct
 import tempfile
 import itertools
 from torch.utils.data import DataLoader, DistributedSampler
+import random
+import numpy
+import torch.distributed.checkpoint as dcp # .checkpoint isn't imported automatically
+from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict
+
+from typing import Callable, Tuple
 
 from llm_train.train import (
     set_seed,
@@ -30,6 +36,24 @@ from llm_train.model_loader import (
 
 from llm_train.dataset import (
     read_cached_data
+)
+
+from llm_train.distributed import (
+    open_group,
+    close_group,
+    wrap_model_ddp,
+    sum_accross_gpus,
+    max_accross_gpus,
+    group_single_action,
+    get_groupwide_random_states,
+    fsdp_split,
+    wait_for_all
+)
+
+from llm_train.checkpoint import (
+    write_run_metadata,
+    safe_write_dir,
+    safe_write_dir_fsdp
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -62,10 +86,18 @@ def copy_audit_and_config(this_run_dir, train_cfg):
     shutil.copyfile(audit_file, this_run_dir /  "environment.txt")
     return None
 
-def instantiate_model(config) -> Mistral3ForConditionalGeneration:
+def instantiate_model(config: dict,
+                      setup:dict,
+                      fsdp: bool = False,
+                      param_dtype: torch.dtype = torch.bfloat16,
+                      reduce_dtype: torch.dtype = torch.float32,
+    ) -> Mistral3ForConditionalGeneration:
+
     # instantiate model
     device = torch.device(config["device"])
     model_cfg = config["model"]
+    world_size = setup["world_size"]
+    local_rank = setup["local_rank"]
 
     model_id = model_cfg["model_id"]
     revision = model_cfg["revision"]
@@ -82,6 +114,17 @@ def instantiate_model(config) -> Mistral3ForConditionalGeneration:
     else:
         model, lm_trainable = load_model(model_id, revision, device, dtype)
 
+    activation_checkpointing = config["train"]["activation_checkpointing"]
+    if activation_checkpointing:
+        model.gradient_checkpointing_enable() # this needs to happen before wrapping
+
+    
+    if world_size > 1: # ie we are using parallelism accross devices
+        if fsdp:
+            fsdp_split(model, setup, param_dtype, reduce_dtype) # in place change
+        else: # DDP case
+            model = wrap_model_ddp(model, local_rank)
+
     return model, lm_trainable
 
 def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
@@ -94,11 +137,91 @@ def fetch_optimizer_scheduler(config, model: Mistral3ForConditionalGeneration):
     optimizer, scheduler = get_optimizer_and_lr_scheduler(model.parameters(), lr, weight_decay, warmup_steps, total_steps)
     return optimizer, scheduler, total_steps
 
+def write_trainable_params_number(this_run_dir, lm_trainable):
+    with open(this_run_dir / "lm_trainable.json", "w") as file:
+        json.dump(lm_trainable, file)
+
+def write_checkpoint(save_dir:Path,
+                     model: Mistral3ForConditionalGeneration,
+                     optimizer: torch.optim.AdamW,
+                     scheduler: torch.optim.lr_scheduler.LambdaLR,
+                     trainer: dict,
+                     random_states: list,
+                     fsdp: bool = None,
+                     
+    ):
+    if not fsdp:
+        torch.save(getattr(model, "module", model).state_dict(), save_dir / "model.pt") # getattr is there to handle both DDP and single process cases
+        torch.save(optimizer.state_dict(), save_dir / "optimizer.pt")
+
+    torch.save(scheduler.state_dict(), save_dir / "scheduler.pt")
+    with open(save_dir / "trainer.json", "w") as file:
+        json.dump(trainer, file)
+    for rank in range(len(random_states)):
+        torch.save(random_states[rank], save_dir / f"rng_rank{rank}.pt")
+
+    return None
+
+def write_fsdp_ckpt(dir, model, optimizer):
+
+    model_state_dict, optimizer_state_dict = get_state_dict(
+        model,
+        optimizer,
+    )
+
+    dcp.save(
+        {
+            "model": model_state_dict,
+            "optimizer": optimizer_state_dict
+        }, 
+        checkpoint_id=dir / "state"
+    )
+    return None
+
+def checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, rank, fsdp):
+    # This assesses that latest_ckpt_folder holds all necessary files
+    # raises if not
+    if fsdp:
+        files = {"state_dicts": None, "scheduler.pt": None, "trainer.json": None}
+        files[f"rng_rank{rank}.pt"] = None
+        for file in files.keys():
+            if ".pt" in file or ".json" in file:
+                file_path = ckpt_dir / latest_ckpt_folder / file
+                if not file_path.exists():
+                    raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {file}")
+                files[file] = file_path
+            else:
+                dir = file_path = ckpt_dir / latest_ckpt_folder / "state"
+                if not dir.exists():
+                    raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {dir}")
+                metadata = dir / ".metadata"
+                if not metadata.exists():
+                    raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {metadata}")
+                files[file] = dir
+        return files
+        
+    files = {"model.pt": None, "optimizer.pt": None, "scheduler.pt": None, "trainer.json": None}
+    files[f"rng_rank{rank}.pt"] = None
+
+    for file in files.keys():
+        file_path = ckpt_dir / latest_ckpt_folder / file
+        if not file_path.exists():
+            raise FileNotFoundError(f"Could not resume from checkpoint {ckpt_step_nb}: missing {file}")
+        files[file] = file_path
+    return files
+
+
+def resume_random_states(pt_paths, rank):
+    states = torch.load(pt_paths[f"rng_rank{rank}.pt"], weights_only=False)
+    random.setstate(states["python"])
+    numpy.random.set_state(states["numpy"])
+    torch.set_rng_state(states["torch"])
+    if torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(states["cuda"])
 
 def training_launcher(train_config: str):
     # This reads the config
     # and goes througha all steps to start training
-
     train_cfg = Path(train_config)
     if not train_cfg.exists():
         raise FileNotFoundError(f"The following config file was not found: {train_cfg}")
@@ -108,18 +231,44 @@ def training_launcher(train_config: str):
         config = yaml.safe_load(file)
     # check artifacts/run exists, if not create a temp dir and copy all in the actual dir at the end (to catch exceptions)
     run_name = config["run_name"]
-    perm_run_dir = run_dir / run_name
+    
+    # Handle fsdp specifics
+    fsdp = config["train"].get("fsdp", False)
+    param_dtype = TORCH_DTYPES[config["train"].get("fsdp_param_dtype", "bfloat16")]
+    reduce_dtype = TORCH_DTYPES[config["train"].get("fsdp_reduce_dtype", "float32")]
+    device = torch.device(config["device"])
 
-    if perm_run_dir.exists():
-        raise FileExistsError(f"Run already exists: {perm_run_dir}")
+    # Get rank and world_size from the torch run group:
+    group = open_group(device)
+    rank = group["rank"]
+    local_rank = group["local_rank"]
+    world_size = group["world_size"]
+
+    perm_run_dir = run_dir / run_name
+    resuming = False
 
     
-    with tempfile.TemporaryDirectory() as tmp_dir :
-        tmp_dir = Path(tmp_dir)
+    if perm_run_dir.exists():
+        # Check whether checkpoint folders exist
+        ckpt_dir = perm_run_dir / "checkpoints"
+        if not ckpt_dir.exists():
+            raise FileNotFoundError("Existing run with this name found but no checkpoint was found.")
+        dir_list = os.listdir(ckpt_dir)
+        step_dirs = [(folder_name, int(folder_name[5:])) for folder_name in dir_list if (folder_name.startswith("step_") and folder_name[5:].isdigit())]
+        if len(step_dirs)==0:
+            raise FileExistsError(f"Run already exists and does not have resumable checkpoint: {perm_run_dir}")
+        resuming = True
+        latest_ckpt_folder , ckpt_step_nb = sorted(step_dirs, key = lambda fld: fld[1])[-1] # returns (folder_name, step_number) and we need only the folder name
+        # check we have all necessary .pt and json files
+        pt_paths = checkpoint_folder_integrity(ckpt_dir, latest_ckpt_folder, ckpt_step_nb, rank, fsdp)
 
-        this_run_dir = tmp_dir / run_name
+    # let's use the context manager to safely create a temp dir and execute all necessary preparations
+    with tempfile.TemporaryDirectory() as tmp_dir :
+        if not resuming:
+            tmp_dir = Path(tmp_dir)
+            this_run_dir = tmp_dir / run_name
         
-        copy_audit_and_config(this_run_dir, train_cfg)
+            group_single_action(lambda: copy_audit_and_config(this_run_dir, train_cfg), rank)
 
         # set seed
         print("Setting seed...\n")
@@ -128,11 +277,22 @@ def training_launcher(train_config: str):
 
         # instantiate model
         print("Instantiate model... \n")
-        model, lm_trainable = instantiate_model(config)
+            
+        model, lm_trainable = instantiate_model(config, group, fsdp, param_dtype, reduce_dtype)
+        # breakpoint()
+
+        if resuming:
+            if fsdp:
+                pass
+                # that case needs the optimizer instantiated too, see further below
+            else:
+                getattr(model, "module", model).load_state_dict(torch.load(pt_paths["model.pt"], map_location=model.device))
+            resume_random_states(pt_paths, rank)
+                
 
         # Write the number of trainable LM parameters down:
-        with open(this_run_dir / "lm_trainable.json", "w") as file:
-            json.dump(lm_trainable, file)
+        if not resuming:
+            group_single_action(lambda : write_trainable_params_number(this_run_dir, lm_trainable), rank)
 
         # read cached data
         print("Reading cached data for training...\n")
@@ -148,37 +308,73 @@ def training_launcher(train_config: str):
         print("Fetching optimizer and scheduler... \n")
         optimizer, scheduler, total_steps = fetch_optimizer_scheduler(config, model)
 
+        if resuming:
+            if fsdp:
+                # now we can handle both the model and the optimizer loading their state dict
+                model_sd, optim_sd = get_state_dict(model, optimizer)
+                state = {"model": model_sd, "optimizer": optim_sd}
+                dcp.load(state, checkpoint_id=pt_paths["state_dicts"])
+                set_state_dict(model, optimizer, model_state_dict=state["model"], optim_state_dict=state["optimizer"])
+            else:
+                optimizer.load_state_dict(torch.load(pt_paths["optimizer.pt"], map_location=model.device))
+            scheduler.load_state_dict(torch.load(pt_paths["scheduler.pt"], map_location=model.device))
+
         # loop over training steps
         train = config["train"]
         max_grad_norm = train["max_grad_norm"]
         autocast = train["autocast"]
-        activation_checkpointing = train["activation_checkpointing"]
         eval_every = train["eval_every"]
         micro_batch_size = train["micro_batch_size"]
         accumulation_steps = train["accumulation_steps"]
 
-        if activation_checkpointing:
-            model.gradient_checkpointing_enable()
-
-
-        # copy all from temp dir to actual dir
-        shutil.move(str(this_run_dir), str(perm_run_dir))
+        if not resuming:
+            # write run manifest
+            group_single_action(lambda: write_run_metadata(config, manifest, world_size, this_run_dir), rank)
+            # copy all from temp dir to actual dir
+            group_single_action(lambda: shutil.move(str(this_run_dir), str(perm_run_dir)), rank)
 
     log_path = perm_run_dir / "log.jsonl"
+    start_step, start_epoch, n_skip_batches = 0, 0, 0
+    print("Getting sampler and loader ready to serve batches... \n")
 
-    print("GEtting sampler and loader ready to serve batches... \n")
-    train_sampler, train_loader = get_sampler_loader(train_set, seed, micro_batch_size, get_batch_from_examples)
-    train_batches = batches_on_tap(train_loader, train_sampler)
+    if resuming:
+        with open(pt_paths["trainer.json"], "r") as f:
+            trainer = json.load(f)
+        start_step = trainer["step"]
+        start_epoch = trainer["epoch"]
+        n_skip_batches = trainer["batches_seen_in_epoch"]
+
+    train_sampler, train_loader = get_sampler_loader(
+        train_set, 
+        seed, 
+        micro_batch_size, 
+        get_batch_from_examples, 
+        rank, 
+        world_size
+    )
+    train_batches = batches_on_tap(train_loader, train_sampler, start_epoch, n_skip_batches)
 
     val_loader = DataLoader(val_set, batch_size=micro_batch_size, shuffle=False, collate_fn=get_batch_from_examples, drop_last=False)
     # val only needs a loader as we are going through all val exmaples each time we run val_step
-
+    checkpoint_every = config["train"].get("checkpoint_every")
     print("="*40)
-    print("STARTING TRAINING LOOP\n\n")
-    eta = None
-    steptimes = []
-    for step in range(total_steps):
+    if resuming:
+        print(f"RESUMING TRAINING AT STEP {start_step}")
+        # let's trim the log to the resumption point if needed
+        group_single_action(
+            lambda: trim_log(log_path, start_step),
+            rank
+        )
 
+    print("STARTING TRAINING LOOP\n\n")
+
+    if checkpoint_every is not None:
+        checkpoints_dir = perm_run_dir / "checkpoints"
+        os.makedirs(checkpoints_dir, exist_ok=True)
+
+    steptimes = []
+        
+    for step in range(start_step, total_steps):
         # prepare the micro_batches
         micro_batches = [next(train_batches) for _ in range(accumulation_steps)] 
 
@@ -188,43 +384,122 @@ def training_launcher(train_config: str):
             optimizer,
             scheduler,
             max_grad_norm,
-            autocast
+            autocast,
+            world_size,
+            fsdp,
         )
-        steptimes.append(log["step_time_s"])
-        if len(steptimes)<20:
-            steptime_ravg = sum(steptimes)/len(steptimes)
-        else:
-            steptime_ravg = sum(steptimes[-20:])/20
 
-        eta = (total_steps-step)*steptime_ravg # total seconds
-        eta_min = eta // 60
-        eta_secs = int((eta - eta_min)*60)
+        completed_steps = step + 1
+        if (checkpoint_every is not None) and (completed_steps % checkpoint_every == 0):
+            # safe checkpoint write
+            step_dir = checkpoints_dir / f"step_{completed_steps:06d}"
+            epoch = completed_steps*accumulation_steps // len(train_loader)
+            batches_seen = completed_steps*accumulation_steps % len(train_loader)
+            trainer = {
+                "step": completed_steps,
+                "epoch": epoch,
+                "batches_seen_in_epoch": batches_seen
+            }
+            random_states = get_groupwide_random_states(world_size)
 
-        print(f"Step [{step}/{total_steps}] (ETA: {eta_min}min{eta_secs}s): {log}\n")
-        # save log line
-        with open(log_path, "a") as file:
-            file.write(json.dumps(log) + "\n")
+            if fsdp:
+                # in that case each device needs to save
+                # write fsdp-specific shards
+                tmp_dir = safe_write_dir_fsdp(step_dir, rank, lambda dir : write_fsdp_ckpt(dir, model, optimizer))
+                group_single_action(
+                    lambda: write_checkpoint(tmp_dir, model, optimizer, scheduler, trainer, random_states, fsdp),
+                    rank
+                )
+                wait_for_all() # wait up
+                group_single_action(
+                    lambda: os.replace(tmp_dir, step_dir),
+                    rank
+                )# this one perform the transition from .step_00XX.tmp to step_00XX, and prevents multiple GPUs trying to do that
+                
+            else:
+                group_single_action(
+                    lambda : safe_write_dir(
+                        step_dir,
+                        lambda dir: write_checkpoint(dir, model, optimizer, scheduler, trainer, random_states, fsdp)
+                    ),
+                    rank
+                ) # this one handles trainer, scheduler and rank writes in any case (ddp, fsdp, no parallel)
+                
+            
+             
+        # should we have DDP we aggregate the loss from all of them to log it
+        log["loss"] = sum_accross_gpus(log["loss"], model.device)
+        log["tokens"] = sum_accross_gpus(log["tokens"], model.device)
+        if log["peak_memory_gb"] is not None:
+            log["peak_memory_gb"] = max_accross_gpus(log["peak_memory_gb"], model.device)
 
+        # we need to find the max of all processes step times for the ETA
+        steptimes.append(
+            max_accross_gpus(log["step_time_s"], model.device)
+        )
+
+        group_single_action(lambda: write_log(log, log_path, total_steps, step, steptimes), rank) # update the .jsonl and the shell on just one GPU (it aggregated all metrics)
 
         if (step + 1) % eval_every == 0:
             val_loss = val_step(model, val_loader, autocast)
             val_log = {"step": step +1, "val_loss": val_loss}
-            print(f"[VALIDATION AT STEP {step +1}]: {val_loss}\n")
-            with open(log_path, "a") as file:
-                file.write(json.dumps(val_log) + "\n")
+            group_single_action(
+                lambda: log_val(val_log, log_path, val_loss, step),
+                rank
+            )
+            
+            
 
+    close_group() # closing our torchrun group
     print("Training concluded.")
     print("="*40)
 
+def trim_log(log_path, start_step):
+    with open(log_path, "r") as f:
+        lines = f.readlines()
+    filtered_lines = []
+    for line in lines:
+        if line.strip(): # non empty lines
+            if json.loads(line)["step"]<=start_step:
+                filtered_lines.append(line)
+    # let's overwrite the log with kept lines:
+    with open(log_path, "w") as f:
+        f.writelines(filtered_lines)
 
-def batches_on_tap(loader: DataLoader, sampler: DistributedSampler):
+    return None
+
+def write_log(log, log_path, total_steps, step, steptimes):
+    if len(steptimes)<20:
+        steptime_ravg = sum(steptimes)/len(steptimes)
+    else:
+        steptime_ravg = sum(steptimes[-20:])/20
+
+    eta = (total_steps-step)*steptime_ravg # total seconds
+    eta_min = int(eta // 60)
+    eta_secs = int(eta % 60)
+
+    print(f"Step [{step}/{total_steps}] (ETA: {eta_min}min{eta_secs}s): {log}\n")
+    
+    # save log line
+    with open(log_path, "a") as file:
+        file.write(json.dumps(log) + "\n")
+
+def log_val(val_log, log_path, val_loss, step):
+    print(f"[VALIDATION AT STEP {step + 1}]: {val_loss}\n")
+    with open(log_path, "a") as file:
+        file.write(json.dumps(val_log) + "\n")
+
+
+def batches_on_tap(loader: DataLoader, sampler: DistributedSampler, start_epoch: int, n_skip_batches: int):
     # loops over the data again and again, with a new shuffle each epoch
-    for epoch in itertools.count():
+    for epoch in itertools.count(start_epoch):
         sampler.set_epoch(epoch)   # each time the yield returns the end, we iterate over this loop and start a new epoch.
-        yield from loader # loader gives batches of size micro_batch_size and collates them using our specified function
+        yield from itertools.islice(loader, n_skip_batches, None) # loader gives batches of size micro_batch_size and collates them using our specified function, starts at n_skip_batches and ends at.. None :)
+        n_skip_batches = 0  # only the first epoch is cut
 
-def get_sampler_loader(dataset, seed, micro_batch_size, fn):
-    sampler = DistributedSampler(dataset, num_replicas=1, rank=0,
+
+def get_sampler_loader(dataset: Dataset, seed: int, micro_batch_size: int, fn: Callable, rank: int, world_size:int) -> Tuple[DistributedSampler, DataLoader]:
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank,
                                  shuffle=True, seed=seed, drop_last=True)
     loader = DataLoader(dataset, batch_size=micro_batch_size, sampler=sampler,
                         collate_fn=fn, drop_last=True)

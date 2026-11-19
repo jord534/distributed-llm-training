@@ -1,0 +1,40 @@
+run_name: dev_nano_ddp_s1337
+seed: 1337
+device: cpu
+
+model:
+  kind: dev
+  model_id: mistralai/Ministral-3-3B-Base-2512
+  revision: 6f9c4b12a95b139af68670a6713616b757923735
+  dtype: float32
+
+dev_dims:
+  text_dims:
+    num_hidden_layers: 2
+    hidden_size: 256
+    intermediate_size: 512
+    num_attention_heads: 4
+    num_key_value_heads: 2
+    head_dim: 64
+  vision_dims:
+    num_hidden_layers: 1
+    hidden_size: 64
+    intermediate_size: 128
+    num_attention_heads: 2
+    head_dim: 32
+
+data:
+  cache: artifacts/data/ultrachat_200k_train_sft_29d7efb2
+  max_train_examples: 16
+
+train:
+  micro_batch_size: 2
+  accumulation_steps: 4
+  learning_rate: 1.0e-3
+  weight_decay: 0.0
+  warmup_steps: 20
+  total_steps: 50
+  max_grad_norm: 1.0
+  autocast: false
+  activation_checkpointing: false
+  eval_every: 50
