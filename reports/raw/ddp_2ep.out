@@ -1,0 +1,236 @@
+W1117 19:04:54.053000 4549 torch/distributed/run.py:982] 
+W1117 19:04:54.053000 4549 torch/distributed/run.py:982] *****************************************
+W1117 19:04:54.053000 4549 torch/distributed/run.py:982] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W1117 19:04:54.053000 4549 torch/distributed/run.py:982] *****************************************
+Setting seed...
+
+OS Audit results: {'system': 'Linux', 'release': '6.8.0-146-generic', 'version': '#146-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep  3 16:12:30 UTC 2026', 'machine': 'x86_64'}
+
+Python version: 3.15.2 (main, Nov 11 2026, 00:19:20) [Clang 23.1.3 ]
+
+========================================
+Trying to import libs: ['torch', 'transformers', 'datasets', 'mistral-common', 'peft', 'safetensors', 'pyyaml', 'pydantic']
+========================================
+[SUCCESS] torch
+[SUCCESS] transformers
+[SUCCESS] datasets
+[SUCCESS] mistral-common
+Instantiate model... 
+
+Loading model on: cuda
+[SUCCESS] peft
+[SUCCESS] safetensors
+[SUCCESS] pyyaml
+[SUCCESS] pydantic
+
+PyTorch Version: 2.15.0+cu132
+CUDA Version Built Against: 13.2
+Is CUDA Available: True
+Torch supports bf16: True
+CUDA device : NVIDIA A100-SXM4-80GB
+CUDA architecture : ['sm_75', 'sm_80', 'sm_86', 'sm_90', 'sm_100', 'sm_120']
+Setting seed...
+
+Instantiate model... 
+
+Loading model on: cuda
+Loading weights:   0%|          | 0/458 [00:00<?, ?it/s]Loading weights:   0%|          | 0/458 [00:00<?, ?it/s]Loading weights:   0%|          | 1/458 [00:00<06:42,  1.13it/s]Loading weights:   0%|          | 1/458 [00:00<06:39,  1.14it/s]Loading weights:  22%|██▏       | 102/458 [00:01<00:02, 136.69it/s]Loading weights:  21%|██        | 95/458 [00:00<00:02, 130.60it/s]Loading weights:  33%|███▎      | 149/458 [00:01<00:02, 136.12it/s]Loading weights:  32%|███▏      | 145/458 [00:01<00:02, 132.84it/s]Loading weights:  40%|███▉      | 181/458 [00:01<00:01, 139.20it/s]Loading weights:  39%|███▉      | 178/458 [00:01<00:02, 126.09it/s]Loading weights:  45%|████▍     | 206/458 [00:01<00:01, 135.51it/s]Loading weights:  50%|████▉     | 227/458 [00:01<00:01, 138.19it/s]Loading weights:  44%|████▍     | 203/458 [00:01<00:02, 123.04it/s]Loading weights:  56%|█████▌    | 257/458 [00:02<00:01, 165.89it/s]Loading weights:  49%|████▊     | 223/458 [00:02<00:01, 125.32it/s]Loading weights:  76%|███████▌  | 347/458 [00:02<00:00, 309.55it/s]Loading weights:  56%|█████▌    | 257/458 [00:02<00:01, 157.60it/s]Loading weights:  93%|█████████▎| 428/458 [00:02<00:00, 414.63it/s]Loading weights: 100%|██████████| 458/458 [00:02<00:00, 203.23it/s]
+Loading weights:  76%|███████▌  | 347/458 [00:02<00:00, 294.40it/s]Loading weights:  93%|█████████▎| 428/458 [00:02<00:00, 398.99it/s]Loading weights: 100%|██████████| 458/458 [00:02<00:00, 193.95it/s]
+Reading cached data for training...
+
+Reading cached data for training...
+
+Fetching optimizer and scheduler... 
+
+Getting sampler and loader ready to serve batches... 
+
+Fetching optimizer and scheduler... 
+
+========================================
+STARTING TRAINING LOOP
+
+
+Getting sampler and loader ready to serve batches... 
+
+========================================
+STARTING TRAINING LOOP
+
+
+Step [0/400] (ETA: 55min26s): {'step': 1, 'loss': 1.3447725772857666, 'grad_norm': 20.072118759155273, 'lr': 0.0, 'tokens': 62546, 'learned_tokens': 62482, 'step_time_s': 8.31500997999683, 'peak_memory_gb': 78.50345611572266}
+
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/workspace/distributed-llm-training/scripts/training_pipeline.py", line 513, in <module>
+[rank0]:     training_launcher(train_config)
+[rank0]:     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/distributed-llm-training/scripts/training_pipeline.py", line 381, in training_launcher
+[rank0]:     log = training_step(
+[rank0]:         model,
+[rank0]:     ...<6 lines>...
+[rank0]:         fsdp,
+[rank0]:     )
+[rank0]:   File "/workspace/distributed-llm-training/src/llm_train/train.py", line 141, in training_step
+[rank0]:     loss = get_loss(logits, labels, learned_tokens)
+[rank0]:   File "/workspace/distributed-llm-training/src/llm_train/train.py", line 85, in get_loss
+[rank0]:     loss = torch.nn.functional.cross_entropy(logits, labels, ignore_index=-100, reduction="sum") / n_learned
+[rank0]:            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/functional.py", line 3561, in cross_entropy
+[rank0]:     return torch._C._nn.cross_entropy_loss(
+[rank0]:            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+[rank0]:         input,
+[rank0]:         ^^^^^^
+[rank0]:     ...<5 lines>...
+[rank0]:         label_smoothing,
+[rank0]:         ^^^^^^^^^^^^^^^^
+[rank0]:     )
+[rank0]:     ^
+[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.29 GiB. GPU 0 has a total capacity of 79.25 GiB of which 924.94 MiB is free. Including non-PyTorch memory, this process has 78.34 GiB memory in use. Of the allocated memory 73.78 GiB is allocated by PyTorch, and 3.44 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/workspace/distributed-llm-training/scripts/training_pipeline.py", line 513, in <module>
+[rank1]:     training_launcher(train_config)
+[rank1]:     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/scripts/training_pipeline.py", line 381, in training_launcher
+[rank1]:     log = training_step(
+[rank1]:         model,
+[rank1]:     ...<6 lines>...
+[rank1]:         fsdp,
+[rank1]:     )
+[rank1]:   File "/workspace/distributed-llm-training/src/llm_train/train.py", line 139, in training_step
+[rank1]:     model_output = model(input_ids=input_ids, attention_mask = attn_mask) # forward pass
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1787, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1798, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/parallel/distributed.py", line 1912, in forward
+[rank1]:     else self._run_ddp_forward(*inputs, **kwargs)
+[rank1]:          ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/parallel/distributed.py", line 1737, in _run_ddp_forward
+[rank1]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
+[rank1]:            ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1787, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1798, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/utils/generic.py", line 1081, in wrapper
+[rank1]:     output = func(self, *args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/utils/generic.py", line 943, in wrapper
+[rank1]:     output = func(self, *args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/models/mistral3/modeling_mistral3.py", line 408, in forward
+[rank1]:     outputs = self.model(
+[rank1]:         input_ids=input_ids,
+[rank1]:     ...<8 lines>...
+[rank1]:         **kwargs,
+[rank1]:     )
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1787, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1798, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/utils/generic.py", line 1081, in wrapper
+[rank1]:     output = func(self, *args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/utils/generic.py", line 943, in wrapper
+[rank1]:     output = func(self, *args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/models/mistral3/modeling_mistral3.py", line 313, in forward
+[rank1]:     outputs = self.language_model(
+[rank1]:         attention_mask=attention_mask,
+[rank1]:     ...<4 lines>...
+[rank1]:         **kwargs,
+[rank1]:     )
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1787, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1798, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/utils/generic.py", line 1081, in wrapper
+[rank1]:     output = func(self, *args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/utils/output_capturing.py", line 287, in wrapper
+[rank1]:     outputs = func(self, *args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/models/ministral3/modeling_ministral3.py", line 377, in forward
+[rank1]:     hidden_states = decoder_layer(
+[rank1]:         hidden_states,
+[rank1]:     ...<5 lines>...
+[rank1]:         **kwargs,
+[rank1]:     )
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/modeling_layers.py", line 111, in __call__
+[rank1]:     return super().__call__(*args, **kwargs)
+[rank1]:            ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1787, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1798, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/models/ministral3/modeling_ministral3.py", line 234, in forward
+[rank1]:     hidden_states, _ = self.self_attn(
+[rank1]:                        ~~~~~~~~~~~~~~^
+[rank1]:         hidden_states=hidden_states,
+[rank1]:         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:     ...<5 lines>...
+[rank1]:         **kwargs,
+[rank1]:         ^^^^^^^^^
+[rank1]:     )
+[rank1]:     ^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1787, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/nn/modules/module.py", line 1798, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/models/ministral3/modeling_ministral3.py", line 144, in forward
+[rank1]:     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+[rank1]:                                ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/transformers/models/ministral3/modeling_ministral3.py", line 62, in apply_rotary_pos_emb
+[rank1]:     q_embed = (q * cos) + (rotate_half(q) * sin)
+[rank1]:                            ~~~~~~~~~~~~~~~^~~~~
+[rank1]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 64.00 MiB. GPU 1 has a total capacity of 79.25 GiB of which 52.94 MiB is free. Including non-PyTorch memory, this process has 79.19 GiB memory in use. Of the allocated memory 76.47 GiB is allocated by PyTorch, and 1.61 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+W1117 19:05:15.247000 4549 torch/distributed/elastic/multiprocessing/api.py:1028] Sending process 4617 closing signal SIGTERM
+E1117 19:05:15.394000 4549 torch/distributed/elastic/multiprocessing/api.py:1002] failed (exitcode: 1) local_rank: 1 (pid: 4618) of binary: /workspace/distributed-llm-training/.venv/bin/python
+Traceback (most recent call last):
+  File "/workspace/distributed-llm-training/.venv/bin/torchrun", line 10, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 384, in wrapper
+    result = f(*args, **kwargs)
+  File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/distributed/run.py", line 1138, in main
+    run(args)
+    ~~~^^^^^^
+  File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/distributed/run.py", line 1129, in run
+    elastic_launch(
+    ~~~~~~~~~~~~~~~
+        config=config,
+        ~~~~~~~~~~~~~~
+        entrypoint=cmd,
+        ~~~~~~~~~~~~~~~
+    )(*cmd_args)
+    ~^^^^^^^^^^^
+  File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/distributed/launcher/api.py", line 197, in __call__
+    return launch_agent(
+        self._config,
+    ...<2 lines>...
+        health_check_server=self._health_check_server,
+    )
+  File "/workspace/distributed-llm-training/.venv/lib/python3.15/site-packages/torch/distributed/launcher/api.py", line 386, in launch_agent
+    raise ChildFailedError(
+    ...<2 lines>...
+    )
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+scripts/training_pipeline.py FAILED
+------------------------------------------------------------
+Failures:
+[1]:
+  time      : 2026-11-17_19:05:15
+  host      : dda4ac5df117
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 4617) 
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-11-17_19:05:15
+  host      : dda4ac5df117
+  rank      : 1 (local_rank: 1)
+  exitcode  : 1 (pid: 4618) 
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================

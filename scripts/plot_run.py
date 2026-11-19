@@ -2,6 +2,7 @@
 import json
 import sys
 from pathlib import Path
+import numpy as np
 import matplotlib.pyplot as plt
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -34,7 +35,7 @@ def plot_run(run_name: str):
     output_dir = REPO_ROOT / "reports" / "plots" / run_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for metric in ["loss", "grad_norm", "lr", "step_time_s"]:
+    for metric in ["loss", "grad_norm", "lr", "step_time_s", "peak_memory_gb"]:
         # keeps only records containing the metric
         metric_lines = [r for r in train_lines if metric in r and "step" in r]
 
@@ -42,11 +43,21 @@ def plot_run(run_name: str):
             continue
 
         plt.figure()
+        metric_vals = [r[metric] for r in metric_lines]
+        metric_median = np.median(metric_vals)
         plt.plot(
             [r["step"] for r in metric_lines],
-            [r[metric] for r in metric_lines],
+            metric_vals,
             label="train"
         )
+        if metric in ["step_time_s", "peak_memory_gb"]:
+
+            plt.plot(
+                [r["step"] for r in metric_lines],
+                [metric_median for _ in range(len(metric_lines))],
+                label=f"median: {np.round(metric_median, 2)}",
+                linestyle="-",
+            )
 
         if metric == "loss":
             val_metric_lines = [r for r in val_lines if "val_loss" in r and "step" in r]
